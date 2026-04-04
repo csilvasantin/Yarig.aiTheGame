@@ -657,7 +657,8 @@ function yarigSyncStaff(){
   YARIG.missionsActive=YARIG.tasks.filter(t=>t.start_time&&!t.end_time&&t.finished==='0').length;
 
   // ── Hue ↔ Yarig task state sync ──
-  if(HUE.enabled&&!hueManualOverride&&hueInitialPollDone){
+  // Skip if light was physically turned off (manualOff) — respect physical switch
+  if(HUE.enabled&&!hueManualOverride&&hueInitialPollDone&&!elgatoState.manualOff){
     const allDone=YARIG.missionsTotal>0&&YARIG.missionsDone===YARIG.missionsTotal;
     const hasActive=YARIG.missionsActive>0;
     // Celebration flash when task just finished
@@ -749,17 +750,31 @@ async function elgatoFetch(path,opts){
   throw new Error('Proxy unreachable — run: node elgato-proxy.js');
 }
 
+// Timestamp: poll ignores bidirectional sync for 2.5s after a digital toggle
+let hueDigitalToggleAt=0;
+let hueTogglePending=null; // pending timeout for debounced bridge command
+
 async function toggleStudioLight(){
-  if(elgatoState.busy) return;
-  elgatoState.busy=true;
-  elgatoState.error=false;
-  // Always toggle visual state immediately (responsive)
+  // ── Instant visual + state update (no blocking) ──
   const newOn=!elgatoState.on;
   elgatoState.on=newOn;
-  elgatoState.manualOff=!newOn; // if turning off manually, prevent auto-on
+  elgatoState.manualOff=!newOn;
   elgatoState.skyRed=newOn;
   elgatoState.notify=120;
-  // Play sound
+  elgatoState.error=false;
+  if(G) G.lampIntensity=newOn?100:0;
+  // Block auto-sync IMMEDIATELY (not in debounce callback)
+  hueDigitalToggleAt=Date.now();
+  hueManualOverride=true;
+  hueManualTimer=3600;
+  HUE.on=newOn;
+  // Update cached real state optimistically so game loop doesn't revert
+  if(hueRealState['1']){
+    hueRealState['1'].on=newOn;
+    if(!newOn) hueRealState['1'].bri=0;
+    else if(hueRealState['1'].bri===0) hueRealState['1'].bri=254;
+  }
+  // Sound
   try{
     const ac=new(window.AudioContext||window.webkitAudioContext)();
     const o=ac.createOscillator(),g=ac.createGain();
@@ -769,37 +784,24 @@ async function toggleStudioLight(){
     o.connect(g);g.connect(ac.destination);
     o.start();o.stop(ac.currentTime+0.2);
   }catch(e){}
-  // Try to also toggle the real Elgato lamp (non-blocking)
-  try{
-    await elgatoFetch('/elgato/lights',{
-      method:'PUT',
-      headers:{'Content-Type':'application/json'},
-      body:JSON.stringify({numberOfLights:1,lights:[{on:newOn?1:0}]}),
-    });
-    console.log(`[Elgato] Real light: ${newOn?'ON':'OFF'}`);
-  }catch(e){
-    console.log('[Elgato] Real light unavailable (game lamp still works)');
-  }
-  // Set lamp intensity immediately so visual updates this frame
-  if(G) G.lampIntensity=newOn?100:0;
-  // Also toggle Hue lights (bypass throttle for manual action)
-  if(HUE.enabled){
-    HUE.on=newOn;
-    HUE.notify=120;
-    hueManualOverride=true;
-    hueManualTimer=3600; // skip auto-sync for 60 seconds after manual toggle
-    // Send directly to each light, bypassing hueAll throttle
-    const hueState=newOn?{on:true,bri:254,ct:300}:{on:false};
-    try{
-      await Promise.allSettled(Object.values(HUE.lights).map(id=>hueSend(id,hueState)));
-      console.log(`[Hue] Lights: ${newOn?'ON':'OFF'}`);
-    }catch(e){
-      HUE.error=true;
-      console.log('[Hue] Lights unavailable');
+  // ── Debounced bridge command: rapid clicks cancel previous, only final state sends ──
+  if(hueTogglePending) clearTimeout(hueTogglePending);
+  const targetOn=newOn; // capture for closure
+  hueTogglePending=setTimeout(()=>{
+    hueTogglePending=null;
+    // Fire-and-forget Elgato
+    try{elgatoFetch('/elgato/lights',{method:'PUT',headers:{'Content-Type':'application/json'},
+      body:JSON.stringify({numberOfLights:1,lights:[{on:targetOn?1:0}]})
+    }).catch(()=>{});}catch(e){}
+    // Fire-and-forget Hue
+    if(HUE.enabled){
+      const hueState=targetOn?{on:true,bri:254,ct:300}:{on:false};
+      Promise.allSettled(Object.values(HUE.lights).map(id=>hueSend(id,hueState)))
+        .then(()=>console.log(`[Hue] Lights: ${targetOn?'ON':'OFF'}`))
+        .catch(()=>{HUE.error=true;});
+      setTimeout(huePollState,2500);
     }
-    setTimeout(huePollState,1500);
-  }
-  elgatoState.busy=false;
+  },300); // 300ms debounce — groups rapid clicks, sends only final state
 }
 
 // ── PHILIPS HUE INTEGRATION ─────────────────────────────────
@@ -852,7 +854,7 @@ async function huePollState(){
   const isLocal=location.hostname==='localhost'||location.hostname==='127.0.0.1';
   if(!isLocal) return;
   try{
-    const res=await fetch(`${location.origin}/hue/lights`,{signal:AbortSignal.timeout(3000)});
+    const res=await fetch(`${location.origin}/hue/lights`,{signal:AbortSignal.timeout(1500)});
     const data=await res.json();
     if(data.error) return;
     let anyOn=false;
@@ -874,16 +876,33 @@ async function huePollState(){
       hueManualTimer=1800; // 30 seconds at 60fps
     }
     // ── Bidirectional sync: real Mesita → digital lamp ──
-    const mesita=hueRealState['1'];
-    if(mesita){
-      const mesitaOn=mesita.on&&mesita.reachable;
-      // Only sync if state actually changed vs digital lamp
-      if(mesitaOn!==elgatoState.on&&!hueManualOverride){
-        elgatoState.on=mesitaOn;
-        elgatoState.manualOff=!mesitaOn;
-        if(G) G.lampIntensity=mesitaOn?(mesita.bri/254*100):0;
-        elgatoState.notify=90;
-        console.log(`[Hue] Mesita changed externally → digital lamp=${mesitaOn?'ON':'OFF'}`);
+    // Skip bidirectional sync for 2.5s after a DIGITAL toggle (our command may not have reached bridge yet)
+    const sinceDT=Date.now()-hueDigitalToggleAt;
+    if(sinceDT<2500){
+      // Don't sync from bridge → digital during this window; our optimistic state is authoritative
+      // But DO update brightness/color from bridge if on
+    } else {
+      // Always sync on/off state (physical switch takes priority)
+      const mesita=hueRealState['1'];
+      if(mesita){
+        const mesitaOn=mesita.on&&mesita.reachable;
+        if(mesitaOn!==elgatoState.on){
+          elgatoState.on=mesitaOn;
+          elgatoState.manualOff=!mesitaOn;
+          if(G) G.lampIntensity=mesitaOn?(mesita.bri/254*100):0;
+          HUE.on=mesitaOn;
+          elgatoState.notify=90;
+          // If this wasn't us, pause auto-sync so we don't fight back
+          if(!hueManualOverride){
+            hueManualOverride=true;
+            hueManualTimer=1800;
+          }
+          console.log(`[Hue] Mesita → digital lamp=${mesitaOn?'ON':'OFF'}`);
+        }
+        // Also sync brightness/color changes while on
+        if(mesitaOn&&G&&!hueManualOverride){
+          G.lampIntensity=mesita.bri/254*100;
+        }
       }
     }
     // Sync digital indicator with real state
@@ -916,6 +935,8 @@ let hueInitialPollDone=false;
     }
   }catch(e){console.warn('[Hue] Initial poll failed:',e.message);}
   hueInitialPollDone=true;
+  // Start dedicated fast-polling interval (1.5s) for responsive external change detection
+  setInterval(()=>{if(HUE.enabled&&hueInitialPollDone){try{huePollState();}catch(e){}}},1500);
 })();
 
 let hueProxyOk=null; // null=unknown, true=working, false=unreachable
@@ -977,50 +998,86 @@ async function hueAll(state){
   // Schedule re-poll to sync real state with what we sent
   setTimeout(huePollState,1500);
 }
-async function hueToggle(){
+function hueToggle(){
   const newOn=!HUE.on;
   HUE.on=newOn;
   HUE.notify=120;
   hueManualOverride=true;
-  hueManualTimer=3600; // 60s override so auto-sync doesn't fight back
-  // Sync digital lamp with Hue toggle
+  hueManualTimer=3600;
+  hueDigitalToggleAt=Date.now();
+  // Sync digital lamp immediately
   elgatoState.on=newOn;
   elgatoState.manualOff=!newOn;
   elgatoState.notify=120;
   if(G) G.lampIntensity=newOn?100:0;
-  // Send directly to each light, bypassing hueAll throttle
-  const state=newOn?{on:true,bri:254,ct:300}:{on:false};
-  const promises=Object.values(HUE.lights).map(id=>hueSend(id,state));
-  await Promise.allSettled(promises);
-  // Re-poll real state after toggle so indicator updates
-  setTimeout(huePollState,1000);
+  // Optimistic cache update
+  if(hueRealState['1']){hueRealState['1'].on=newOn;if(!newOn)hueRealState['1'].bri=0;else if(hueRealState['1'].bri===0)hueRealState['1'].bri=254;}
+  // Debounced send (reuse same pending as toggleStudioLight)
+  if(hueTogglePending) clearTimeout(hueTogglePending);
+  const targetOn=newOn;
+  hueTogglePending=setTimeout(()=>{
+    hueTogglePending=null;
+    const state=targetOn?{on:true,bri:254,ct:300}:{on:false};
+    Promise.allSettled(Object.values(HUE.lights).map(id=>hueSend(id,state)))
+      .then(()=>setTimeout(huePollState,2500));
+  },300);
 }
 // Sync Hue lights with game state (called from updateGame, throttled)
 let hueManualOverride=false; // true when user manually toggled — skip auto-sync briefly
 let hueManualTimer=0;
+// DJ strobe colors — vivid party palette in CIE xy
+const DJ_COLORS=[
+  [0.68,0.31],  // rojo
+  [0.17,0.70],  // verde
+  [0.15,0.06],  // azul/violeta
+  [0.55,0.44],  // naranja
+  [0.32,0.15],  // magenta/rosa
+  [0.15,0.25],  // cyan
+  [0.44,0.52],  // amarillo
+  [0.25,0.05],  // púrpura
+];
+let djHueFrame=0; // rolling color index for Hue
+let djHueLastSent=0; // timestamp of last DJ Hue command
+let djHueBusy=false; // prevents overlapping DJ sends
+
 function hueSyncWithGame(){
   if(!HUE.enabled) return;
   if(!G||!G.gameTime) return;
-  // Wait for initial poll before auto-syncing — respect real lamp state first
   if(!hueInitialPollDone) return;
-  // If user just toggled manually, skip auto-sync for 3 seconds
+
+  // ── DJ MODE: highest priority — overrides manualOff and manualOverride ──
+  const djOn=G.staff&&G.staff.some(st=>st.hired&&!st.fired&&st.role===4);
+  if(djOn){
+    // Force lights on during DJ set
+    if(elgatoState.manualOff){
+      elgatoState.manualOff=false;
+      elgatoState.on=true;
+    }
+    // Throttled DJ strobe: one command at a time, min 500ms apart
+    const now=Date.now();
+    if(!djHueBusy&&now-djHueLastSent>=500){
+      djHueBusy=true;
+      djHueLastSent=now;
+      const col=DJ_COLORS[djHueFrame%DJ_COLORS.length];
+      djHueFrame++;
+      const flash=Math.sin(tt*0.3)>0;
+      const bri=flash?254:40;
+      // Send to all lights, wait for completion before allowing next send
+      Promise.allSettled(Object.values(HUE.lights).map(id=>
+        hueSend(id,{on:true,bri,xy:col,transitiontime:0})
+      )).finally(()=>{djHueBusy=false;});
+    }
+    return;
+  }
+
+  // ── Normal mode guards ──
+  if(elgatoState.manualOff) return;
   if(hueManualOverride){
     hueManualTimer--;
     if(hueManualTimer<=0) hueManualOverride=false;
     else return;
   }
   const h=G.gameTime;
-  // DJ strobe: sync Hue with strobe effect (every 30 frames ≈ 0.5s)
-  const djOn=G.staff&&G.staff.some(st=>st.hired&&st.role===4);
-  if(djOn){
-    if(elgatoState.manualOff) return; // user turned off lights manually — respect it
-    if(tt%30===0){
-      const flash=Math.sin(tt*0.3)>0;
-      HUE.lastSent=0; // force send, bypass throttle
-      hueAll({on:true,bri:flash?254:25,xy:[Math.random()*0.3+0.15,Math.random()*0.3+0.1],transitiontime:1});
-    }
-    return;
-  }
   // Normal time-based sync (every 2 seconds)
   if(tt%120!==0) return;
   // Storm: blue flash (priority)
@@ -1992,12 +2049,23 @@ function doAction(id){
       s.fireTx=doorP.x;s.fireTy=doorP.y-40;
       G.doorOpen=60;
       addFloat(s.x,s.y-40,'Bye bye!','#cc4444');
-      // DJ fired → switch back to normal playlist
+      // DJ fired → switch back to normal playlist + restore Hue lights
       if(s.role===4){
         const prevSong=shopTimeSettings.nowPlaying||SONG_LIST[0];
         G.nowPlaying=prevSong;
         if(SONG_FILES[prevSong]){bgMusic.src=SONG_FILES[prevSong];bgMusic.play().catch(()=>{});}
         addFloat(W/2,40,'🎧 DJ OFF','#886688');
+        // Restore Hue lights to normal warm white after DJ party
+        if(HUE.enabled){
+          djHueFrame=0;
+          hueManualOverride=true;hueManualTimer=300; // 5s cooldown before auto-sync resumes
+          for(const id2 of Object.values(HUE.lights)){
+            hueSend(id2,{on:true,bri:254,ct:300,effect:'none',alert:'none',transitiontime:2});
+          }
+          // Clear DJ color from cache so digital lamp returns to warm
+          if(hueRealState['1']){delete hueRealState['1'].xy;hueRealState['1'].ct=300;hueRealState['1'].colormode='ct';}
+          setTimeout(huePollState,2000);
+        }
       }
     }
   }
@@ -2575,39 +2643,53 @@ function updateGame(){
   // Sync Hue lights with game time
   try{hueSyncWithGame();}catch(e){}
   // Poll real Hue state every ~10 seconds (600 frames at 60fps)
-  if(tt%600===30&&HUE.enabled){try{huePollState();}catch(e){}}
+  // Hue polling is now handled by dedicated setInterval (see huePollingInterval below)
   // Progressive lighting: driven by real Hue Mesita state when available
   let lampIntensity=0;
-  const mesitaState=hueRealState['1'];
-  if(mesitaState&&mesitaState.reachable&&HUE.enabled){
-    // ── Real Hue Mesita drives the lamp ──
-    if(mesitaState.on){
-      lampIntensity=Math.round(mesitaState.bri/254*100);
-      if(!elgatoState.on&&!elgatoState.manualOff){elgatoState.on=true;}
-    } else {
-      lampIntensity=0;
-    }
+  const recentDigitalToggle=Date.now()-hueDigitalToggleAt<2500;
+  if(recentDigitalToggle){
+    // ── Digital toggle in progress: use elgatoState directly (authoritative) ──
+    lampIntensity=elgatoState.on?Math.max(G.lampIntensity||100,1):0;
   } else {
-    // ── Fallback: game time drives the lamp (no Hue) ──
-    if(G.gameTime>=19&&G.gameTime<shopTimeSettings.closeHour&&!G.dayEnded){
-      lampIntensity=100;
-    } else if(G.gameTime>=17&&G.gameTime<19&&!G.dayEnded){
-      lampIntensity=Math.min(80,20+(G.gameTime-17)*30);
+    const mesitaState=hueRealState['1'];
+    if(mesitaState&&mesitaState.reachable&&HUE.enabled){
+      // ── Real Hue Mesita drives the lamp ──
+      if(mesitaState.on){
+        lampIntensity=Math.round(mesitaState.bri/254*100);
+        if(!elgatoState.on&&!elgatoState.manualOff){elgatoState.on=true;}
+      } else {
+        lampIntensity=0;
+      }
+    } else {
+      // ── Fallback: game time drives the lamp (no Hue) ──
+      if(G.gameTime>=19&&G.gameTime<shopTimeSettings.closeHour&&!G.dayEnded){
+        lampIntensity=100;
+      } else if(G.gameTime>=17&&G.gameTime<19&&!G.dayEnded){
+        lampIntensity=Math.min(80,20+(G.gameTime-17)*30);
+      }
     }
   }
   // If manually turned off, intensity is 0 visually
   if(elgatoState.manualOff) lampIntensity=0;
-  // DJ strobe effect: lamp flashes on/off rapidly (visual always, real lights respect manualOff)
-  const djOn=G.staff&&G.staff.some(st=>st.hired&&st.role===4);
+  // DJ strobe effect: lamp flashes colors rapidly — overrides manualOff (stops immediately on fire)
+  const djOn=G.staff&&G.staff.some(st=>st.hired&&!st.fired&&st.role===4);
   if(djOn){
-    if(!elgatoState.manualOff){
-      elgatoState.on=true;
+    elgatoState.on=true;
+    elgatoState.manualOff=false;
+    const flash=Math.sin(tt*0.3)>0;
+    lampIntensity=flash?100:15;
+    // Force DJ color into hueRealState so hueLampColor() picks it up for the digital lamp
+    const col=DJ_COLORS[Math.floor(tt/20)%DJ_COLORS.length];
+    if(hueRealState['1']){
+      hueRealState['1'].on=true;
+      hueRealState['1'].xy=col;
+      hueRealState['1'].bri=flash?254:40;
+      hueRealState['1'].colormode='xy';
     }
-    lampIntensity=Math.sin(tt*0.3)>0?100:10;
   }
   G.lampIntensity=lampIntensity;
-  // Auto-turn on lamp when intensity > 0 (only if not manually turned off)
-  if(lampIntensity>0&&!elgatoState.on&&!elgatoState.manualOff){
+  // Auto-turn on lamp when intensity > 0 (only if not manually turned off and not recent digital toggle)
+  if(lampIntensity>0&&!elgatoState.on&&!elgatoState.manualOff&&!recentDigitalToggle){
     elgatoState.on=true;
     elgatoState.manualOff=false;
     elgatoState.notify=60;
@@ -4903,7 +4985,7 @@ function drawShop(){
       }
       // Warm glow from DJ booth LEDs at night
       const djItem=shopLayout.find(i=>i.type==='djBooth');
-      const djHiredNight=G.staff&&G.staff.some(s=>s.hired&&s.role===4);
+      const djHiredNight=G.staff&&G.staff.some(s=>s.hired&&!s.fired&&s.role===4);
       if(djItem&&djHiredNight){
         const dp=toIso(djItem.col+0.5,djItem.row);
         const djRad=cx.createRadialGradient(dp.x,dp.y,3,dp.x,dp.y,70);
@@ -5270,9 +5352,9 @@ function drawAltadisTFT(){
     cx.fillStyle='#fff';cx.font='bold '+Math.max(5,Math.round(sH*0.1))+'px monospace';
     cx.fillText('DELEGACIÓN',cX,cY+sH*0.42);
     cx.textAlign='left';
-  } else if(G&&(!bgMusic.paused||(G.staff&&G.staff.some(s=>s.hired&&s.role===4)))){
-    // ── MUSIC / DJ EQ VISUALIZER ──
-    const djOnViz=G.staff&&G.staff.some(s=>s.hired&&s.role===4);
+  } else if(G&&G.staff&&G.staff.some(s=>s.hired&&!s.fired&&s.role===4)){
+    // ── DJ EQ VISUALIZER (only when DJ is active) ──
+    const djOnViz=true;
     cx.fillStyle='#000a18';cx.fillRect(0,0,vW,vH);
     // Scanline texture
     cx.globalAlpha=0.04;
@@ -5977,7 +6059,7 @@ function drawIsoVending(col,row){
 // ── DJ BOOTH (mesa de DJ) ────────────────────────────────────
 function drawIsoDJBooth(col,row){
   const boothH=26;
-  const djOn=G&&G.staff&&G.staff.some(s=>s.hired&&s.role===4);
+  const djOn=G&&G.staff&&G.staff.some(s=>s.hired&&!s.fired&&s.role===4);
   const party=G&&G.tftParty>0;
 
   // Base: matte black with subtle neon edge
@@ -6233,7 +6315,7 @@ function drawIsoStaff(s){
     cx.restore();
   } else {
   // Idle dance: employees dance to the music when not walking or busy
-  const djHired=G&&G.staff&&G.staff.some(st=>st.hired&&st.role===4);
+  const djHired=G&&G.staff&&G.staff.some(st=>st.hired&&!st.fired&&st.role===4);
   const isIdle=!s.isWalking&&s.busy<=0;
   if(!isPlayer&&isIdle){
     // Faster + bigger bounce when DJ is active, subtle sway otherwise
@@ -6296,7 +6378,7 @@ function drawIsoStaff(s){
     for(let i=0;i<s.level;i++){tx('★',s.x-3+i*8,s.y+38,'#cc9900',7);}
   }
   // Speech bubble
-  const djActive=G&&G.staff&&G.staff.some(st=>st.hired&&st.role===4);
+  const djActive=G&&G.staff&&G.staff.some(st=>st.hired&&!st.fired&&st.role===4);
   if(djActive){
     // DJ mode: always show "Altadis Party!!" bubble
     const msg='Altadis Party!!';
@@ -6360,7 +6442,7 @@ function drawIsoCust(c){
   // Customers never wear blue (index 0) — use indices 1-5 only
   const shirtIdx=1+(Math.abs(c.hair)%(P.shirts.length-1));
   // DJ effect: customers dance (bob up/down + alternate frame fast)
-  const djHired=G&&G.staff&&G.staff.some(s=>s.hired&&s.role===4);
+  const djHired=G&&G.staff&&G.staff.some(s=>s.hired&&!s.fired&&s.role===4);
   if(djHired){
     const bob=Math.sin(tt*0.2+c.x*0.1)*3;
     chibi(c.x,c.y+bob,c.dir||1,shirtIdx,c.hair%P.hair.length,Math.floor(tt/6)%2,true,tt);
@@ -6374,7 +6456,7 @@ function drawIsoCust(c){
     chibi(c.x,c.y,c.dir||1,shirtIdx,c.hair%P.hair.length,c.fr,false,tt);
   }
   // ── Mood icon (satisfaction) ──
-  const djHiredMood=G&&G.staff&&G.staff.some(s=>s.hired&&s.role===4);
+  const djHiredMood=G&&G.staff&&G.staff.some(s=>s.hired&&!s.fired&&s.role===4);
   let moodIcon=null;
   if(c.bought){
     moodIcon='😊';
