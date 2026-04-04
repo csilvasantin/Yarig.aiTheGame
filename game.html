@@ -541,6 +541,9 @@ let elgatoState={on:false,busy:false,notify:0,error:false,skyRed:false,manualOff
 let monitorAlert={active:false,timer:0,msg:'',color:''};
 
 // ── YARIG.AI INTEGRATION ────────────────────────────────────
+// Set to false to disable live Yarig.ai connection (vanilla game mode)
+const YARIG_LIVE_ENABLED=true;
+
 const YARIG={
   pollInterval:30000,lastPoll:0,connected:false,
   tasks:[],team:[],clocking:[],score:0,roster:{},
@@ -557,6 +560,7 @@ async function yarigFetch(path,opts={}){
 }
 
 async function yarigPoll(){
+  if(!YARIG_LIVE_ENABLED)return;
   YARIG.lastPoll=Date.now();
   const data=await yarigFetch('today');
   if(!data){YARIG.connected=false;return;}
@@ -597,6 +601,7 @@ function yarigSyncStaff(){
 }
 
 async function yarigAction(action,data={}){
+  if(!YARIG_LIVE_ENABLED)return null;
   const res=await yarigFetch('task/'+action,{method:'POST',body:data});
   setTimeout(()=>yarigPoll(),500);
   return res;
