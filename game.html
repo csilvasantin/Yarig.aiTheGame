@@ -1629,6 +1629,7 @@ document.addEventListener('keydown',e=>{
     if(e.code==='Digit2'){activeTab=1;uiOpen=true;}
     if(e.code==='Digit3'){activeTab=2;uiOpen=true;}
     if(e.code==='Digit4'){activeTab=3;uiOpen=true;}
+    if(e.code==='Digit5'&&YARIG_LIVE_ENABLED){activeTab=4;uiOpen=true;}
     // L = toggle Elgato studio light
     if(e.code==='KeyL'){toggleStudioLight();}
     // C = toggle air conditioning
@@ -1700,6 +1701,27 @@ cv.addEventListener('mousemove',e=>{
 function doAction(id){
   checkGuidedTut(id);
   if(id.startsWith('tab')){activeTab=parseInt(id[3]);return;}
+  // Yarig actions
+  if(id.startsWith('yarigStart_')){
+    const idx=parseInt(id.split('_')[1]);
+    const t=YARIG.tasks[idx];
+    if(t) yarigAction('open',{id:t.id});
+    return;
+  }
+  if(id.startsWith('yarigPause_')){
+    const idx=parseInt(id.split('_')[1]);
+    const t=YARIG.tasks[idx];
+    if(t) yarigAction('close',{tid:t.id,finished:0});
+    return;
+  }
+  if(id.startsWith('yarigFinish_')){
+    const idx=parseInt(id.split('_')[1]);
+    const t=YARIG.tasks[idx];
+    if(t) yarigAction('close',{tid:t.id,finished:1});
+    return;
+  }
+  if(id==='yarigRefresh'){yarigPoll();return;}
+  if(id==='closeUI'){uiOpen=false;return;}
   if(id.startsWith('hire')){
     const i=parseInt(id[4]);
     const s=G.staff[i];
@@ -6340,16 +6362,19 @@ function drawUI(){
   tx('✕',UI.x+UI.w-13,17,'#5a4020',10,'center');
   BTNS['closeUI']={x:UI.x+UI.w-22,y:4,w:18,h:18};
   // Tabs (warm style)
-  const tabs=T().tabs,tw=UI.w/4;
+  const tabNames=[...T().tabs];
+  if(YARIG_LIVE_ENABLED) tabNames.push('Yarig');
+  const numTabs=tabNames.length;
+  const tw=UI.w/numTabs;
   const tabY=26;
-  for(let i=0;i<4;i++){
+  for(let i=0;i<numTabs;i++){
     const tx2=UI.x+i*tw;
     r(tx2,tabY,tw,20,i===activeTab?P.uiH:P.uiB);
     if(i===activeTab){
       cx.strokeStyle='#8a6a30';cx.lineWidth=2;
       cx.beginPath();cx.moveTo(tx2,tabY+19.5);cx.lineTo(tx2+tw,tabY+19.5);cx.stroke();
     }
-    tx(tabs[i].slice(0,3),tx2+tw/2,tabY+15,i===activeTab?'#5a4020':P.uiT3,7,'center');
+    tx(tabNames[i].slice(0,3),tx2+tw/2,tabY+15,i===activeTab?'#5a4020':P.uiT3,7,'center');
     BTNS['tab'+i]={x:tx2,y:tabY,w:tw,h:20};
   }
   cx.strokeStyle='#c0b898';cx.lineWidth=1;
@@ -6359,6 +6384,70 @@ function drawUI(){
   if(activeTab===1) tabStaff(py);
   if(activeTab===2) tabStock(py);
   if(activeTab===3) tabStore(py);
+  if(activeTab===4&&YARIG_LIVE_ENABLED) tabYarig(py);
+}
+
+function tabYarig(py){
+  const x=UI.x+8,w=UI.w-16;
+  // Header
+  const connCol=YARIG.connected?'#44aa44':'#aa4444';
+  const connTxt=YARIG.connected?'Conectado':'Desconectado';
+  tx('🎯 Yarig.ai',x+w/2,py+10,'#5a4020',9,'center');
+  tx(connTxt,x+w/2,py+22,connCol,7,'center');
+
+  // Score
+  tx('Puntuación: '+YARIG.score,x+w-5,py+10,'#8a7a5a',7,'right');
+
+  let y=py+32;
+
+  // Tasks
+  if(YARIG.tasks.length===0){
+    tx('Sin tareas para hoy',x+w/2,y+10,'#a09888',8,'center');
+  }
+  for(let i=0;i<YARIG.tasks.length&&i<6;i++){
+    const t=YARIG.tasks[i];
+    const desc=(t.description||'').trim();
+    const proj=t.project||'';
+    const isActive=t.start_time&&!t.end_time&&t.finished==='0';
+    const isPaused=t.start_time&&t.end_time&&t.finished==='0';
+    const isDone=t.finished==='1';
+    const isPending=!t.start_time&&t.finished==='0';
+
+    // Task row background
+    const rowH=38;
+    const rowCol=isActive?'#e8f4fd':isPaused?'#fff3cd':isDone?'#d4edda':'#f8f8f0';
+    r(x,y,w,rowH,rowCol);rx(x,y,w,rowH,'#c0b898',0.5);
+
+    // Status icon + description
+    const icon=isDone?'✅':isActive?'▶️':isPaused?'⏸':'⏳';
+    tx(icon,x+10,y+14,'#333',9);
+    tx(desc.slice(0,20)+(desc.length>20?'…':''),x+24,y+14,'#4a3a20',7);
+    tx(proj,x+24,y+26,'#8a7a5a',6);
+
+    // Action buttons
+    if(isPending||isPaused){
+      mkBtn('yarigStart_'+i,x+w-65,y+4,28,14,'▶️','#28a745');
+    }
+    if(isActive){
+      mkBtn('yarigPause_'+i,x+w-65,y+4,28,14,'⏸','#f39c12');
+    }
+    if(!isDone){
+      mkBtn('yarigFinish_'+i,x+w-32,y+4,28,14,'✅','#28a745');
+    }
+
+    y+=rowH+2;
+  }
+
+  // Refresh button
+  y+=8;
+  mkBtn('yarigRefresh',x+w/2-30,y,60,18,'🔄 Sync','#3498db');
+
+  // Clocking info
+  if(YARIG.clocking.length>0){
+    y+=28;
+    const c=YARIG.clocking[0];
+    tx('🕐 '+c.name+' desde '+c.datetime.split(' ')[1],x+w/2,y,'#8a7a5a',7,'center');
+  }
 }
 
 function mkBtn(id,x,y,w,h,lbl,col,ok=true){
