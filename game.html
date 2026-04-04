@@ -6,7 +6,7 @@
   <meta http-equiv="Cache-Control" content="no-cache, no-store, must-revalidate"/>
   <meta http-equiv="Pragma" content="no-cache"/>
   <meta http-equiv="Expires" content="0"/>
-  <title>Yarig.ai The Game — v5.1</title>
+  <title>Yarig.ai The Game — v5.2</title>
   <style>
     *{margin:0;padding:0;box-sizing:border-box}
     html,body{width:100%;height:100%;overflow:hidden;background:#000;font-family:monospace}
@@ -70,7 +70,7 @@
 </div>
 <script>
 // ═══════════════════════════════════════════════════════════════
-//  YARIG.AI THE GAME — v5.1 — 2026-04-04
+//  YARIG.AI THE GAME — v5.2 — 2026-04-04
 // ═══════════════════════════════════════════════════════════════
 const cv=document.getElementById('c'), cx=cv.getContext('2d');
 cx.imageSmoothingEnabled=false;
@@ -579,44 +579,88 @@ async function yarigPoll(){
 function yarigSyncStaff(){
   if(!G||!G.staff)return;
   const prevStates={};
-  // Save previous states to detect transitions
   G.staff.forEach((s,i)=>{prevStates[i]=s.yarigState||'idle';});
 
+  // Build user map from clocking (who is working today)
+  const clockedUsers=new Set();
+  YARIG.clocking.forEach(c=>{if(c.type==='0'||c.type===0)clockedUsers.add(c.name);});
+
+  // Assign tasks to staff slots
   for(let i=0;i<G.staff.length;i++){
     const s=G.staff[i];
-    if(!s.hired)continue;
     const task=YARIG.tasks[i]||null;
+
     if(task){
+      // Auto-hire slot
+      if(!s.hired){s.hired=true;s.level=1;s.energy=80;}
+
+      // Real name from clocking or team
+      if(i===0&&YARIG.clocking.length>0){
+        s.name=YARIG.clocking[0].name.split(' ')[0].toUpperCase();
+        s.yarigFullName=YARIG.clocking[0].name;
+      } else if(task.id_user){
+        const mate=YARIG.team.find(m=>m.user_id===task.id_user);
+        if(mate){s.name=mate.name.split(' ')[0].toUpperCase();s.yarigFullName=mate.name;}
+      }
+
+      // Persistent appearance per user
+      const uid=task.id_user||('t'+i);
+      const look=yarigGetRosterAppearance(uid);
+      if(i>0){s.shirt=look.shirt;s.hair=look.hair;} // slot 0 keeps uniform
+
+      // Task data
       s.yarigTaskId=task.id;
       s.yarigTaskDesc=task.description?task.description.trim():'';
       s.yarigProject=task.project||'';
+      s.yarigInterruptions=(task.interruptions||[]).length;
+
+      // State
       if(task.finished==='1'){s.yarigState='finished';s.busy=0;}
-      else if(task.start_time&&!task.end_time){s.yarigState='active';s.busy=50;s.bTimer=70;}
-      else if(task.start_time&&task.end_time){s.yarigState='paused';s.busy=0;}
-      else{s.yarigState='pending';s.busy=0;}
-    }else{s.yarigTaskId=null;s.yarigTaskDesc='';s.yarigState='idle';}
+      else if(task.start_time&&!task.end_time){
+        s.yarigState='active';s.busy=50;s.bTimer=70;
+        // Timer: minutes since start
+        const start=new Date(task.start_time);
+        s.yarigElapsed=Math.floor((Date.now()-start.getTime())/60000);
+      }
+      else if(task.start_time&&task.end_time){s.yarigState='paused';s.busy=0;s.yarigElapsed=0;}
+      else{s.yarigState='pending';s.busy=0;s.yarigElapsed=0;}
+    }else{
+      s.yarigTaskId=null;s.yarigTaskDesc='';s.yarigState='idle';s.yarigElapsed=0;
+      s.yarigInterruptions=0;
+    }
 
     // Celebration: task just finished!
-    if(prevStates[i]!=='finished'&&s.yarigState==='finished'){
+    if(s.hired&&prevStates[i]!=='finished'&&s.yarigState==='finished'){
       const desc=s.yarigTaskDesc||'Tarea';
-      if(G.floats) G.floats.push({txt:'🎉 '+desc.slice(0,15)+'!',x:s.x,y:s.y-30,life:90,col:'#28a745'});
-      if(G.floats) G.floats.push({txt:'✅',x:s.x+20,y:s.y-50,life:60,col:'#ffffff'});
+      if(G.floats){
+        G.floats.push({txt:'🎉 '+desc.slice(0,15)+'!',x:s.x,y:s.y-30,life:90,col:'#28a745'});
+        G.floats.push({txt:'✅',x:s.x+20,y:s.y-50,life:60,col:'#ffffff'});
+      }
     }
     // Started: show notification
-    if(prevStates[i]!=='active'&&s.yarigState==='active'){
+    if(s.hired&&prevStates[i]!=='active'&&s.yarigState==='active'){
       if(G.floats) G.floats.push({txt:'▶️ '+s.yarigTaskDesc.slice(0,15),x:s.x,y:s.y-30,life:60,col:'#3498db'});
+    }
+    // Interruption: spawn angry customer
+    if(s.hired&&s.yarigInterruptions>0&&Math.random()<0.01){
+      if(G.floats) G.floats.push({txt:'⚠️ Interrupción!',x:s.x,y:s.y-40,life:50,col:'#e74c3c'});
     }
   }
 
-  // Score → morale: higher score = higher morale for all staff
+  // Score → morale
   const moraleBasis=Math.max(30,Math.min(100,60+YARIG.score*2));
   G.staff.forEach(s=>{if(s.hired)s.morale=moraleBasis;});
 
-  // Auto-hire slots to match tasks
-  const needed=Math.min(YARIG.tasks.length,G.staff.length);
-  for(let i=0;i<needed;i++){
-    if(!G.staff[i].hired){G.staff[i].hired=true;G.staff[i].level=1;G.staff[i].energy=80;G.staff[i].morale=moraleBasis;}
-    if(i===0&&YARIG.clocking.length>0) G.staff[i].name=YARIG.clocking[0].name.split(' ')[0].toUpperCase();
+  // Missions: count completed tasks today
+  YARIG.missionsTotal=YARIG.tasks.length;
+  YARIG.missionsDone=YARIG.tasks.filter(t=>t.finished==='1').length;
+  YARIG.missionsActive=YARIG.tasks.filter(t=>t.start_time&&!t.end_time&&t.finished==='0').length;
+
+  // Update LED banner with Yarig status
+  if(YARIG.connected&&G.staff[0]&&G.staff[0].yarigState==='active'){
+    YARIG.ledMsg='★ '+G.staff[0].name+' TRABAJA EN: '+(G.staff[0].yarigTaskDesc||'').toUpperCase().slice(0,30)+' ★  '+YARIG.missionsDone+'/'+YARIG.missionsTotal+' TAREAS COMPLETADAS  ★';
+  }else{
+    YARIG.ledMsg='★ YARIG.AI ★  '+YARIG.missionsDone+'/'+YARIG.missionsTotal+' TAREAS COMPLETADAS HOY  ★  PUNTUACIÓN: '+YARIG.score+'  ★';
   }
 }
 
@@ -1007,7 +1051,7 @@ let activeModel=0;
 // ── I18N ──────────────────────────────────────────────────────
 const LANGS={
   es:{
-    menuTitle:'XTANCO',menuSub:'SIMULADOR DE PRODUCTIVIDAD — v5.1',
+    menuTitle:'XTANCO',menuSub:'SIMULADOR DE PRODUCTIVIDAD — v5.2',
     langPick:'SELECCIONA IDIOMA',startBtn:'PULSA ENTER PARA EMPEZAR',
     langEs:'🇪🇸  CASTELLANO',langEn:'🇬🇧  ENGLISH',
     tut:[
@@ -1070,7 +1114,7 @@ const LANGS={
     modelStart:['€3.500','€2.800','€4.500','€6.000'],
   },
   en:{
-    menuTitle:'XTANCO',menuSub:'PRODUCTIVITY SIMULATOR — v5.1',
+    menuTitle:'XTANCO',menuSub:'PRODUCTIVITY SIMULATOR — v5.2',
     langPick:'SELECT LANGUAGE',startBtn:'PRESS ENTER TO START',
     langEs:'🇪🇸  CASTELLANO',langEn:'🇬🇧  ENGLISH',
     tut:[
@@ -3175,7 +3219,7 @@ function drawMenu(){
     }
   }
   // Version tag
-  cx.globalAlpha=0.3;tx('v5.1 · 2026-04-04',W-80,H-8,P.gray,7,'center');cx.globalAlpha=1;
+  cx.globalAlpha=0.3;tx('v5.2 · 2026-04-04',W-80,H-8,P.gray,7,'center');cx.globalAlpha=1;
 }
 
 // ── INTRO / HOW TO PLAY ───────────────────────────────────────
@@ -4789,7 +4833,8 @@ function _getLedParams(){
   const liveData=(state===S.GAME||state===S.PAUSE)
     ? `  ◈  ${T().customers}: ${G?G.customersToday:0}  ◈  ${T().satisfaction}: ${G?(G.satisfaction|0):0}%  ◈  ${T().fame}: ${G?(G.fame|0):0}%  ◈  `
     : '  ◈  ';
-  const fullMsg=currentVideoMsg+msgs.join('   ◆   ')+liveData;
+  const yarigData=(YARIG_LIVE_ENABLED&&YARIG.connected&&YARIG.ledMsg)?('  ◆  '+YARIG.ledMsg+'  ◆  '):'';
+  const fullMsg=currentVideoMsg+msgs.join('   ◆   ')+liveData+yarigData;
   cx.font='bold 9px monospace';
   const msgW=cx.measureText(fullMsg).width;
   return {fullMsg, msgW};
@@ -5513,8 +5558,26 @@ function drawIsoMonitor(col,row){
   rx(p.x-12,p.y-30,24,18,'#1a1a1a',1);
   // Screen (blue-ish with content)
   r(p.x-10,p.y-28,20,14,'#1a3050');
-  // Screen content: XTANCO logo
-  tx('XTANCO',p.x,p.y-22,'#88bbdd',6,'center');
+  // Screen content: Yarig data or XTANCO logo
+  if(YARIG_LIVE_ENABLED&&YARIG.connected){
+    const done=YARIG.missionsDone||0;
+    const total=YARIG.missionsTotal||0;
+    const active=YARIG.missionsActive||0;
+    // Cycle between screens every 3 seconds
+    const screen=Math.floor(tt/180)%3;
+    if(screen===0){
+      tx(done+'/'+total,p.x,p.y-24,'#66ee88',7,'center');
+      tx('TAREAS',p.x,p.y-16,'#88bbdd',5,'center');
+    }else if(screen===1){
+      tx('🎯 '+YARIG.score,p.x,p.y-24,'#ffdd66',7,'center');
+      tx('SCORE',p.x,p.y-16,'#88bbdd',5,'center');
+    }else{
+      tx(active>0?'▶️ '+active:'✅',p.x,p.y-24,active>0?'#3498db':'#44dd66',7,'center');
+      tx(active>0?'ACTIVAS':'DONE',p.x,p.y-16,'#88bbdd',5,'center');
+    }
+  }else{
+    tx('XTANCO',p.x,p.y-22,'#88bbdd',6,'center');
+  }
   // Blinking cursor
   if(Math.floor(tt/30)%2===0){
     r(p.x-4,p.y-17,6,1,'#66aacc');
@@ -6021,8 +6084,17 @@ function drawIsoStaff(s){
   r(s.x-1,s.y+28,16,3,'#c0b8a0');
   r(s.x-1,s.y+28,(16*s.energy/100)|0,3,s.energy>50?P.green:s.energy>25?P.yellow:P.red);
   rx(s.x-1,s.y+28,16,3,'#a09880',0.5);
-  // Level stars (golden)
-  for(let i=0;i<s.level;i++){tx('★',s.x-3+i*8,s.y+38,'#cc9900',7);}
+  // Yarig timer (minutes elapsed on active task)
+  if(s.yarigState==='active'&&s.yarigElapsed>0){
+    const mins=s.yarigElapsed;
+    const h=Math.floor(mins/60);
+    const m=mins%60;
+    const timeStr=h>0?(h+'h'+String(m).padStart(2,'0')):(m+'m');
+    tx('⏱'+timeStr,s.x+7,s.y+38,'#3498db',6,'center');
+  } else {
+    // Level stars (golden)
+    for(let i=0;i<s.level;i++){tx('★',s.x-3+i*8,s.y+38,'#cc9900',7);}
+  }
   // Speech bubble
   const djActive=G&&G.staff&&G.staff.some(st=>st.hired&&st.role===4);
   if(djActive){
@@ -6227,11 +6299,25 @@ function drawHUD(){
     r(600,2,120,24,'#4a0010');rx(600,2,120,24,'#ff6688',2);
     tx('🔍 INSPECCIÓN',660,18,'#ff8899',10,'center');
   }
-  // Yarig.ai connection indicator
+  // Yarig.ai mission bar + connection indicator
   if(YARIG.connected){
-    const yt=YARIG.tasks.filter(t=>t.start_time&&!t.end_time&&t.finished==='0').length;
-    const col=yt>0?'#44dd66':'#88aa55';
-    tx('🎯',W-50,18,col,10);tx(yt+'',W-38,18,col,9);
+    const done=YARIG.missionsDone||0;
+    const total=YARIG.missionsTotal||0;
+    const active=YARIG.missionsActive||0;
+    // Mission progress bar
+    const mbx=W-120,mby=4,mbw=60,mbh=8;
+    const prog=total>0?done/total:0;
+    r(mbx,mby,mbw,mbh,'#1a1208');
+    r(mbx,mby,(mbw*prog)|0,mbh,prog>=1?'#44dd66':'#ccaa44');
+    rx(mbx,mby,mbw,mbh,'#4a3820',1);
+    tx(done+'/'+total,mbx+mbw/2,mby+7,'#fff',6,'center');
+    // Active indicator
+    tx('🎯',W-50,18,active>0?'#44dd66':'#88aa55',10);
+    tx(active+'',W-38,18,active>0?'#44dd66':'#88aa55',9);
+    // All missions done = bonus celebration
+    if(prog>=1&&Math.floor(tt/30)%2===0){
+      tx('🏆',W-28,10,'#ffdd66',8);
+    }
   }else if(YARIG.lastPoll>0){
     tx('🎯',W-50,18,'#664444',10);tx('✗',W-38,18,'#dd4444',9);
   }
