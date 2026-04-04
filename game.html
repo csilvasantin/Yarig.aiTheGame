@@ -786,7 +786,7 @@ async function toggleStudioLight(){
     HUE.notify=120;
     HUE.lastSent=0; // force bypass throttle
     hueManualOverride=true;
-    hueManualTimer=180; // skip auto-sync for 3 seconds
+    hueManualTimer=3600; // skip auto-sync for 60 seconds after manual toggle
     try{
       if(newOn) await hueAll({on:true,bri:254,ct:300});
       else await hueAll({on:false});
@@ -822,9 +822,69 @@ function saveHueSettings(){
 }
 loadHueSettings();
 
+// ── Hue tab lock: only the most recent tab controls lights ──
+const HUE_TAB_ID=Date.now()+'-'+Math.random().toString(36).slice(2,8);
+function hueIsActiveTab(){
+  try{
+    const lock=localStorage.getItem('xtanco_hue_lock');
+    if(!lock) return true;
+    const parsed=JSON.parse(lock);
+    // If our tab or if the lock is >15s stale, we can claim it
+    return parsed.id===HUE_TAB_ID || (Date.now()-parsed.ts>15000);
+  }catch(e){return true;}
+}
+function hueClaimLock(){
+  try{localStorage.setItem('xtanco_hue_lock',JSON.stringify({id:HUE_TAB_ID,ts:Date.now()}));}catch(e){}
+}
+// Claim on load, refresh every 5s
+hueClaimLock();
+setInterval(hueClaimLock,5000);
+
+// Real state from bridge — polled every 10s
+const hueRealState={}; // {lightId: {on,bri,hue,sat,xy,ct,colormode,reachable,effect,alert}}
+let hueLastPoll=0;
+let hueExpectedState={}; // what we last sent to each light {id: {on,bri,...}}
+async function huePollState(){
+  if(!HUE.enabled) return;
+  const isLocal=location.hostname==='localhost'||location.hostname==='127.0.0.1';
+  if(!isLocal) return;
+  try{
+    const res=await fetch(`${location.origin}/hue/lights`,{signal:AbortSignal.timeout(3000)});
+    const data=await res.json();
+    if(data.error) return;
+    let anyOn=false;
+    let externalChange=false;
+    for(const[id,light] of Object.entries(data)){
+      const prev=hueRealState[id];
+      hueRealState[id]={...light.state, name:light.name};
+      if(light.state.on&&light.state.reachable) anyOn=true;
+      // Detect external change: real state differs from what we last sent
+      const exp=hueExpectedState[id];
+      if(exp!==undefined&&prev){
+        if(exp.on!==undefined&&light.state.on!==exp.on) externalChange=true;
+      }
+    }
+    // If someone changed lights externally (app, switch, etc), respect it as manual override
+    if(externalChange&&!hueManualOverride){
+      console.log('[Hue] External change detected — pausing auto-sync 30s');
+      hueManualOverride=true;
+      hueManualTimer=1800; // 30 seconds at 60fps
+    }
+    // Sync digital indicator with real state
+    HUE.on=anyOn;
+    HUE.error=false;
+    hueLastPoll=Date.now();
+  }catch(e){
+    console.warn('[Hue] Poll failed:',e.message);
+  }
+}
+// Initial poll
+setTimeout(huePollState,2000);
+
 let hueProxyOk=null; // null=unknown, true=working, false=unreachable
 async function hueSend(lightId,stateObj){
   if(!HUE.enabled) return;
+  if(!hueIsActiveTab()){console.log('[Hue] Skipped — not active tab');return;}
   const isLocal=location.hostname==='localhost'||location.hostname==='127.0.0.1';
   const isHTTPS=location.protocol==='https:';
   const body=JSON.stringify(stateObj);
@@ -848,6 +908,13 @@ async function hueSend(lightId,stateObj){
       }
       console.log(`[Hue] OK light ${lightId} →`,stateObj,`via ${url.split('/')[2]}`);
       HUE.error=false;hueProxyOk=true;
+      // Update local real-state cache and expected state with what we just sent
+      if(!hueRealState[lightId]) hueRealState[lightId]={};
+      Object.assign(hueRealState[lightId],stateObj);
+      if(!hueExpectedState[lightId]) hueExpectedState[lightId]={};
+      Object.assign(hueExpectedState[lightId],stateObj);
+      // Sync HUE.on from real state
+      HUE.on=Object.values(hueRealState).some(s=>s.on);
       return;
     }catch(e){
       console.warn(`[Hue] Fetch failed ${url}:`,e.message);
@@ -868,16 +935,21 @@ async function hueAll(state){
   HUE.lastSent=tt;
   const promises=Object.values(HUE.lights).map(id=>hueSend(id,state));
   await Promise.allSettled(promises);
+  // Schedule re-poll to sync real state with what we sent
+  setTimeout(huePollState,1500);
 }
 async function hueToggle(){
   const newOn=!HUE.on;
   HUE.on=newOn;
   HUE.notify=120;
-  if(newOn){
-    await hueAll({on:true,bri:254,ct:300});
-  } else {
-    await hueAll({on:false});
-  }
+  hueManualOverride=true;
+  hueManualTimer=3600; // 60s override so auto-sync doesn't fight back
+  // Send directly to each light, bypassing hueAll throttle
+  const state=newOn?{on:true,bri:254,ct:300}:{on:false};
+  const promises=Object.values(HUE.lights).map(id=>hueSend(id,state));
+  await Promise.allSettled(promises);
+  // Re-poll real state after toggle so indicator updates
+  setTimeout(huePollState,1000);
 }
 // Sync Hue lights with game state (called from updateGame, throttled)
 let hueManualOverride=false; // true when user manually toggled — skip auto-sync briefly
@@ -2019,14 +2091,14 @@ function doAction(id){
     G.gameTime=9;elgatoState.on=false;G.lampIntensity=0;
     try{elgatoFetch('/elgato/lights',{method:'PUT',headers:{'Content-Type':'application/json'},body:JSON.stringify({numberOfLights:1,lights:[{on:0}]})});}catch(e){}
     // Hue: mañana → apagada
-    HUE.on=false;HUE.notify=90;HUE.lastSent=0;hueManualOverride=true;hueManualTimer=180;
+    HUE.on=false;HUE.notify=90;HUE.lastSent=0;hueManualOverride=true;hueManualTimer=3600;
     try{hueAll({on:false});}catch(e){}
     showEv('🌅 '+(lang==='es'?'Mañana: luz natural':'Morning: daylight'),'#ffbb44');SFX.eventChime();return;
   }
   if(id==='time_pm'){
     G.gameTime=14;
     // Hue: tarde → 50% cálida
-    HUE.on=true;HUE.notify=90;HUE.lastSent=0;hueManualOverride=true;hueManualTimer=180;
+    HUE.on=true;HUE.notify=90;HUE.lastSent=0;hueManualOverride=true;hueManualTimer=3600;
     try{hueAll({on:true,bri:127,ct:340});}catch(e){}
     showEv('☀️ '+(lang==='es'?'Tarde: tabaco y lotería':'Afternoon: tobacco & lottery'),'#ee8833');SFX.eventChime();return;
   }
@@ -2034,7 +2106,7 @@ function doAction(id){
     G.gameTime=19;elgatoState.on=true;elgatoState.manualOff=false;G.lampIntensity=100;
     try{elgatoFetch('/elgato/lights',{method:'PUT',headers:{'Content-Type':'application/json'},body:JSON.stringify({numberOfLights:1,lights:[{on:1,brightness:100}]})});}catch(e){}
     // Hue: noche → 100% cálida
-    HUE.on=true;HUE.notify=90;HUE.lastSent=0;hueManualOverride=true;hueManualTimer=180;
+    HUE.on=true;HUE.notify=90;HUE.lastSent=0;hueManualOverride=true;hueManualTimer=3600;
     try{hueAll({on:true,bri:254,ct:366});}catch(e){}
     showEv('🌙 '+(lang==='es'?'Noche: luces encendidas':'Night: lights on'),'#8866bb');SFX.eventChime();return;
   }
@@ -2445,6 +2517,8 @@ function updateGame(){
   G.weekTimer=Math.floor(((G.gameTime-shopTimeSettings.openHour)/dayHours)*CFG.WEEK_TICKS);
   // Sync Hue lights with game time
   try{hueSyncWithGame();}catch(e){}
+  // Poll real Hue state every ~10 seconds (600 frames at 60fps)
+  if(tt%600===30&&HUE.enabled){try{huePollState();}catch(e){}}
   // Progressive lighting: afternoon gradual, night full
   let lampIntensity=0;
   if(G.gameTime>=19&&G.gameTime<shopTimeSettings.closeHour&&!G.dayEnded){
@@ -6347,6 +6421,31 @@ function drawHUD(){
   }else if(YARIG.lastPoll>0){
     tx('🎯',W-50,18,'#664444',10);tx('✗',W-38,18,'#dd4444',9);
   }
+  // Persistent Hue mini-indicator (always visible)
+  if(HUE.enabled){
+    const hx=W-22,hy=22;
+    const lightIds=Object.values(HUE.lights);
+    let anyOn=false,anyReachable=false;
+    for(const lid of lightIds){
+      const rs=hueRealState[lid];
+      if(rs&&rs.reachable) anyReachable=true;
+      if(rs&&rs.on) anyOn=true;
+    }
+    // Small dot: green=on, gray=off, red=error
+    const dotCol=HUE.error?'#dd4444':anyOn?'#cc99ff':'#555566';
+    cx.beginPath();cx.arc(hx,hy,4,0,Math.PI*2);cx.fillStyle=dotCol;cx.fill();
+    if(anyOn){cx.strokeStyle='#ffffff44';cx.lineWidth=0.5;cx.stroke();}
+    // Per-light mini-dots underneath
+    const ldx=hx-(lightIds.length*6)/2;
+    for(let i=0;i<lightIds.length;i++){
+      const rs=hueRealState[lightIds[i]];
+      let c='#333';
+      if(rs&&rs.on&&rs.reachable) c='#cc88ff';
+      else if(rs&&rs.reachable) c='#555';
+      else if(rs) c='#442222';
+      cx.beginPath();cx.arc(ldx+i*6+3,hy+7,2,0,Math.PI*2);cx.fillStyle=c;cx.fill();
+    }
+  }
 }
 
 // ── DRAW EVENT MSG ────────────────────────────────────────────
@@ -6364,7 +6463,7 @@ function drawElgatoNotify(){
   const by=2,bh=24,gap=4;
   // Position from right edge
   let rx2=W-4; // right margin
-  // Hue badge (rightmost)
+  // Hue badge (rightmost) — shows real per-light state
   if(showHue){
     HUE.notify--;
     const alpha=Math.min(1,HUE.notify/25);
@@ -6376,15 +6475,56 @@ function drawElgatoNotify(){
       r(bx,by,bw,bh,'#3a0a2a');rx(bx,by,bw,bh,'#cc33aa',1.5);
       tx(isHTTPS?'⚠ Hue: usar localhost:9124':'⚠ Hue offline',bx+bw/2,by+16,'#ff66cc',8,'center');
       rx2=bx-gap;
-    } else if(HUE.on){
-      const bw=80;const bx=rx2-bw;
-      r(bx,by,bw,bh,'#2a1a3a');rx(bx,by,bw,bh,'#aa66cc',1.5);
-      tx('🟣 Hue ON',bx+bw/2,by+16,'#cc99ff',9,'center');
-      rx2=bx-gap;
     } else {
-      const bw=80;const bx=rx2-bw;
-      r(bx,by,bw,bh,'#0a0a1a');rx(bx,by,bw,bh,'#6644aa',1.5);
-      tx('🟣 Hue OFF',bx+bw/2,by+16,'#8877aa',9,'center');
+      // Show per-light status with real colors
+      const lightIds=Object.values(HUE.lights);
+      const bw=30+lightIds.length*50;const bx=rx2-bw;
+      r(bx,by,bw,bh,'#1a1a2e');rx(bx,by,bw,bh,HUE.on?'#aa66cc':'#444466',1.5);
+      let lx=bx+6;
+      tx('💡',lx,by+16,HUE.on?'#cc99ff':'#666688',9);
+      lx+=18;
+      for(const lid of lightIds){
+        const rs=hueRealState[lid];
+        if(rs){
+          // Draw color dot from real state
+          let dotCol='#444';
+          if(rs.on){
+            if(rs.xy){
+              // Approximate CIE xy → hex for display
+              const x=rs.xy[0],y=rs.xy[1],z=1-x-y;
+              const Y2=rs.bri/254;const X2=Y2/y*x;const Z2=Y2/y*z;
+              let rr=X2*3.2406-Y2*1.5372-Z2*0.4986;
+              let gg=-X2*0.9689+Y2*1.8758+Z2*0.0415;
+              let bb=X2*0.0557-Y2*0.204+Z2*1.057;
+              const gam=v=>v>0.0031308?1.055*Math.pow(v,1/2.4)-0.055:12.92*v;
+              rr=Math.max(0,Math.min(255,Math.round(gam(rr)*255)));
+              gg=Math.max(0,Math.min(255,Math.round(gam(gg)*255)));
+              bb=Math.max(0,Math.min(255,Math.round(gam(bb)*255)));
+              dotCol=`rgb(${rr},${gg},${bb})`;
+            } else if(rs.ct){
+              // Color temp → warm/cool
+              dotCol=rs.ct>350?'#ffcc77':rs.ct>250?'#ffeedd':'#ccddff';
+            } else {
+              dotCol='#ffffff';
+            }
+          }
+          // Light dot
+          cx.beginPath();cx.arc(lx+5,by+12,5,0,Math.PI*2);
+          cx.fillStyle=rs.on?dotCol:'#333';cx.fill();
+          if(rs.on){cx.strokeStyle='#fff';cx.lineWidth=1;cx.stroke();}
+          else{cx.strokeStyle='#555';cx.lineWidth=0.5;cx.stroke();}
+          // Light name (short)
+          const name=(rs.name||'L'+lid).slice(0,8);
+          tx(name,lx+14,by+16,rs.on?'#ddd':'#666',7);
+          lx+=50;
+        } else {
+          // No real state yet — show ID
+          cx.beginPath();cx.arc(lx+5,by+12,4,0,Math.PI*2);
+          cx.fillStyle='#555';cx.fill();
+          tx('L'+lid,lx+12,by+16,'#666',7);
+          lx+=40;
+        }
+      }
       rx2=bx-gap;
     }
     cx.globalAlpha=1;
@@ -7630,7 +7770,7 @@ window.xtAPI = (function(){
 
     // ── HUE ──────────────────────────────────────────────────
     hueStatus: function(){
-      return {ok:true,data:{enabled:HUE.enabled,on:HUE.on,bridge:HUE.bridgeIP,lights:HUE.lights,error:HUE.error}};
+      return {ok:true,data:{enabled:HUE.enabled,on:HUE.on,bridge:HUE.bridgeIP,lights:HUE.lights,error:HUE.error,realState:hueRealState,lastPoll:hueLastPoll?new Date(hueLastPoll).toLocaleTimeString():'never'}};
     },
     hueToggle: function(){
       hueToggle();
@@ -7647,8 +7787,9 @@ window.xtAPI = (function(){
       const Z=rr*0.0193+gg*0.1192+bb*0.9505;
       const sum=X+Y+Z;
       const x=sum>0?X/sum:0.3127;const y=sum>0?Y/sum:0.3290;
-      HUE.lastSent=0;
-      hueAll({on:true,bri:254,xy:[x,y]});
+      hueManualOverride=true;hueManualTimer=3600;
+      const st={on:true,bri:254,xy:[x,y]};
+      Promise.allSettled(Object.values(HUE.lights).map(id=>hueSend(id,st)));
       return {ok:true,message:`Color RGB(${r},${g},${b}) → xy(${x.toFixed(3)},${y.toFixed(3)})`};
     },
     hueScene: function(scene){
@@ -7662,12 +7803,14 @@ window.xtAPI = (function(){
       };
       const s=scenes[scene];
       if(!s) return {ok:false,message:'Escenas: '+Object.keys(scenes).join(', ')};
-      HUE.lastSent=0;hueAll(s);
+      hueManualOverride=true;hueManualTimer=3600;
+      Promise.allSettled(Object.values(HUE.lights).map(id=>hueSend(id,s)));
       return {ok:true,message:'Escena Hue: '+scene};
     },
     hueBrightness: function(bri){
       if(bri<1||bri>254) return {ok:false,message:'Brillo: 1-254'};
-      HUE.lastSent=0;hueAll({on:true,bri:bri});
+      hueManualOverride=true;hueManualTimer=3600;
+      Promise.allSettled(Object.values(HUE.lights).map(id=>hueSend(id,{on:true,bri:bri})));
       return {ok:true,message:'Brillo: '+bri};
     },
 

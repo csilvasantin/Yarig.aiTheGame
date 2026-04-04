@@ -49,8 +49,14 @@ function hueRequest(method, endpoint, body) {
         try { resolve(JSON.parse(data)); } catch { resolve(data); }
       });
     });
-    req.on('error', reject);
-    if (body) req.write(JSON.stringify(body));
+    if (body) {
+      const bodyStr = JSON.stringify(body);
+      opts.headers['Content-Length'] = Buffer.byteLength(bodyStr);
+      req.on('error', reject);
+      req.write(bodyStr);
+    } else {
+      req.on('error', reject);
+    }
     req.end();
   });
 }
