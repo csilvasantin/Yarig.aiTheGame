@@ -657,7 +657,7 @@ function yarigSyncStaff(){
   YARIG.missionsActive=YARIG.tasks.filter(t=>t.start_time&&!t.end_time&&t.finished==='0').length;
 
   // ── Hue ↔ Yarig task state sync ──
-  if(HUE.enabled&&!hueManualOverride){
+  if(HUE.enabled&&!hueManualOverride&&hueInitialPollDone){
     const allDone=YARIG.missionsTotal>0&&YARIG.missionsDone===YARIG.missionsTotal;
     const hasActive=YARIG.missionsActive>0;
     // Celebration flash when task just finished
@@ -870,6 +870,19 @@ async function huePollState(){
       hueManualOverride=true;
       hueManualTimer=1800; // 30 seconds at 60fps
     }
+    // ── Bidirectional sync: real Mesita → digital lamp ──
+    const mesita=hueRealState['1'];
+    if(mesita){
+      const mesitaOn=mesita.on&&mesita.reachable;
+      // Only sync if state actually changed vs digital lamp
+      if(mesitaOn!==elgatoState.on&&!hueManualOverride){
+        elgatoState.on=mesitaOn;
+        elgatoState.manualOff=!mesitaOn;
+        if(G) G.lampIntensity=mesitaOn?(mesita.bri/254*100):0;
+        elgatoState.notify=90;
+        console.log(`[Hue] Mesita changed externally → digital lamp=${mesitaOn?'ON':'OFF'}`);
+      }
+    }
     // Sync digital indicator with real state
     HUE.on=anyOn;
     HUE.error=false;
@@ -878,17 +891,40 @@ async function huePollState(){
     console.warn('[Hue] Poll failed:',e.message);
   }
 }
-// Initial poll
-setTimeout(huePollState,2000);
+// Initial poll — sync digital lamp with real Hue lamp on load
+let hueInitialPollDone=false;
+(async ()=>{
+  try{
+    // Claim Hue session on server — blocks other tabs from sending
+    const isLocal=location.hostname==='localhost'||location.hostname==='127.0.0.1';
+    if(isLocal){
+      try{await fetch(`${location.origin}/hue/claim`,{method:'POST',headers:{'Content-Type':'application/json'},body:JSON.stringify({tabId:HUE_TAB_ID})});}catch(e){}
+    }
+    await huePollState();
+    // Mesita (light 1) = the lamp next to the computer → controls digital floor lamp
+    const mesita=hueRealState['1'];
+    if(mesita){
+      const realOn=mesita.on&&mesita.reachable;
+      elgatoState.on=realOn;
+      elgatoState.manualOff=!realOn;
+      HUE.on=realOn;
+      if(G) G.lampIntensity=realOn?(mesita.bri/254*100):0;
+      console.log(`[Hue] Initial sync: Mesita=${realOn?'ON':'OFF'} → digital lamp=${realOn?'ON':'OFF'}`);
+    }
+  }catch(e){console.warn('[Hue] Initial poll failed:',e.message);}
+  hueInitialPollDone=true;
+})();
 
 let hueProxyOk=null; // null=unknown, true=working, false=unreachable
 async function hueSend(lightId,stateObj){
   if(!HUE.enabled) return;
+  // Block ALL outgoing commands until we've read real state at least once
+  if(!hueInitialPollDone){console.log('[Hue] Blocked — waiting for initial poll');return;}
   if(!hueIsActiveTab()){console.log('[Hue] Skipped — not active tab');return;}
   const isLocal=location.hostname==='localhost'||location.hostname==='127.0.0.1';
   const isHTTPS=location.protocol==='https:';
   const body=JSON.stringify(stateObj);
-  const opts={method:'PUT',body,headers:{'Content-Type':'application/json'},signal:AbortSignal.timeout(2000)};
+  const opts={method:'PUT',body,headers:{'Content-Type':'application/json','X-Hue-Tab':HUE_TAB_ID},signal:AbortSignal.timeout(2000)};
 
   // Build URL list by priority
   const urls=[];
@@ -944,6 +980,11 @@ async function hueToggle(){
   HUE.notify=120;
   hueManualOverride=true;
   hueManualTimer=3600; // 60s override so auto-sync doesn't fight back
+  // Sync digital lamp with Hue toggle
+  elgatoState.on=newOn;
+  elgatoState.manualOff=!newOn;
+  elgatoState.notify=120;
+  if(G) G.lampIntensity=newOn?100:0;
   // Send directly to each light, bypassing hueAll throttle
   const state=newOn?{on:true,bri:254,ct:300}:{on:false};
   const promises=Object.values(HUE.lights).map(id=>hueSend(id,state));
@@ -957,6 +998,8 @@ let hueManualTimer=0;
 function hueSyncWithGame(){
   if(!HUE.enabled) return;
   if(!G||!G.gameTime) return;
+  // Wait for initial poll before auto-syncing — respect real lamp state first
+  if(!hueInitialPollDone) return;
   // If user just toggled manually, skip auto-sync for 3 seconds
   if(hueManualOverride){
     hueManualTimer--;
@@ -1606,6 +1649,17 @@ function initGame(){
   G.bars=[{val:55,col:P.neon1},{val:40,col:P.neon3},{val:72,col:P.neonB},{val:50,col:P.neon2}];
   buildWalkGrid();
   yarigPoll(); // Initial Yarig.ai sync
+  // Sync digital lamp with real Hue Mesita state on game start
+  huePollState().then(()=>{
+    const mesita=hueRealState['1'];
+    if(mesita){
+      const realOn=mesita.on&&mesita.reachable;
+      elgatoState.on=realOn;
+      elgatoState.manualOff=!realOn;
+      G.lampIntensity=realOn?(mesita.bri/254*100):0;
+      console.log(`[Hue] Game start: Mesita=${realOn?'ON':'OFF'} → lamp=${realOn?'ON':'OFF'}`);
+    }
+  });
 }
 
 // ── SAVE / LOAD ───────────────────────────────────────────────

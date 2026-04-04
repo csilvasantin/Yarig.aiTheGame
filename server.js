@@ -31,6 +31,7 @@ const YARIG_HOST = 'yarig.ai';
 // ── Philips Hue ────────────────────────────────────────────
 const HUE_BRIDGE_IP = process.env.HUE_BRIDGE_IP || '';
 const HUE_API_KEY = process.env.HUE_API_KEY || '';
+let hueSessionOwner = ''; // tab ID of the active controller
 
 function hueRequest(method, endpoint, body) {
   return new Promise((resolve, reject) => {
@@ -296,6 +297,16 @@ const server = http.createServer(async (req, res) => {
     return;
   }
 
+  // ── Hue session lock: last tab to claim wins ──
+
+  if (url === '/hue/claim' && req.method === 'POST') {
+    const body = await readBody(req);
+    hueSessionOwner = body.tabId || '';
+    console.log(`[Hue] Session claimed by tab: ${hueSessionOwner}`);
+    jsonResponse(res, { ok: true, owner: hueSessionOwner });
+    return;
+  }
+
   // ── Hue API routes ──
 
   if (url === '/hue/lights') {
@@ -316,11 +327,17 @@ const server = http.createServer(async (req, res) => {
     return;
   }
 
-  // PUT /hue/lights/:id/state — set light state
+  // PUT /hue/lights/:id/state — set light state (only from session owner)
   if (url.match(/^\/hue\/lights\/\d+\/state$/) && req.method === 'PUT') {
     if (!HUE_BRIDGE_IP) { jsonResponse(res, { error: 'Hue not configured' }); return; }
     const lightId = url.split('/')[3];
     const body = await readBody(req);
+    // Check session lock — reject writes from non-owner tabs
+    const tabId = req.headers['x-hue-tab'] || '';
+    if (hueSessionOwner && tabId && tabId !== hueSessionOwner) {
+      jsonResponse(res, [{ error: { type: 901, description: 'Not session owner' } }]);
+      return;
+    }
     try {
       const data = await hueRequest('PUT', `/lights/${lightId}/state`, body);
       jsonResponse(res, data);
