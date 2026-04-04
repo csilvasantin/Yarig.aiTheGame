@@ -2573,12 +2573,24 @@ function updateGame(){
   try{hueSyncWithGame();}catch(e){}
   // Poll real Hue state every ~10 seconds (600 frames at 60fps)
   if(tt%600===30&&HUE.enabled){try{huePollState();}catch(e){}}
-  // Progressive lighting: afternoon gradual, night full
+  // Progressive lighting: driven by real Hue Mesita state when available
   let lampIntensity=0;
-  if(G.gameTime>=19&&G.gameTime<shopTimeSettings.closeHour&&!G.dayEnded){
-    lampIntensity=100; // Night: full brightness
-  } else if(G.gameTime>=17&&G.gameTime<19&&!G.dayEnded){
-    lampIntensity=Math.min(80,20+(G.gameTime-17)*30); // Late afternoon: gradual 20→80%
+  const mesitaState=hueRealState['1'];
+  if(mesitaState&&mesitaState.reachable&&HUE.enabled){
+    // ── Real Hue Mesita drives the lamp ──
+    if(mesitaState.on){
+      lampIntensity=Math.round(mesitaState.bri/254*100);
+      if(!elgatoState.on&&!elgatoState.manualOff){elgatoState.on=true;}
+    } else {
+      lampIntensity=0;
+    }
+  } else {
+    // ── Fallback: game time drives the lamp (no Hue) ──
+    if(G.gameTime>=19&&G.gameTime<shopTimeSettings.closeHour&&!G.dayEnded){
+      lampIntensity=100;
+    } else if(G.gameTime>=17&&G.gameTime<19&&!G.dayEnded){
+      lampIntensity=Math.min(80,20+(G.gameTime-17)*30);
+    }
   }
   // If manually turned off, intensity is 0 visually
   if(elgatoState.manualOff) lampIntensity=0;
@@ -5822,17 +5834,47 @@ function drawIsoDoor(col,row){
 
 // ── DECORATION ───────────────────────────────────────────────
 
+// Convert Hue real state to RGB color for digital lamp
+function hueLampColor(){
+  const ms=hueRealState['1'];
+  if(!ms||!ms.on) return {r:255,g:238,b:102}; // default warm yellow
+  if(ms.xy){
+    const x=ms.xy[0],y=ms.xy[1],z=1-x-y;
+    const Y2=(ms.bri||254)/254;const X2=Y2/y*x;const Z2=Y2/y*z;
+    let rr=X2*3.2406-Y2*1.5372-Z2*0.4986;
+    let gg=-X2*0.9689+Y2*1.8758+Z2*0.0415;
+    let bb=X2*0.0557-Y2*0.204+Z2*1.057;
+    const gam=v=>v>0.0031308?1.055*Math.pow(v,1/2.4)-0.055:12.92*v;
+    return {
+      r:Math.max(0,Math.min(255,Math.round(gam(rr)*255))),
+      g:Math.max(0,Math.min(255,Math.round(gam(gg)*255))),
+      b:Math.max(0,Math.min(255,Math.round(gam(bb)*255)))
+    };
+  }
+  if(ms.ct){
+    // Color temperature to RGB approximation
+    const ct=ms.ct;
+    if(ct>400) return {r:255,g:200,b:120}; // warm
+    if(ct>300) return {r:255,g:230,b:180}; // neutral
+    return {r:220,g:235,b:255}; // cool daylight
+  }
+  return {r:255,g:238,b:102};
+}
+
 function drawIsoFloorLamp(col,row){
   const p=toIso(col,row);
   const isOn=elgatoState.on;
   const intensity=G?G.lampIntensity/100:0; // 0.0→1.0
+  const lc=hueLampColor(); // real Hue color
+  const haloCol=`rgb(${lc.r},${lc.g},${lc.b})`;
+  const haloColA=(a)=>`rgba(${lc.r},${lc.g},${lc.b},${a})`;
 
   // ── Halo de luz en el suelo (proporcional a intensidad) ──
   if(isOn&&intensity>0){
     cx.globalAlpha=(0.03+0.12*intensity)+0.02*Math.sin(tt*0.04);
     const haloR=12+18*intensity;
     cx.beginPath();cx.ellipse(p.x,p.y+5,haloR,haloR*0.5,0,0,Math.PI*2);
-    cx.fillStyle='#ffee66';cx.fill();
+    cx.fillStyle=haloCol;cx.fill();
     cx.globalAlpha=1;
   }
 
@@ -5847,30 +5889,32 @@ function drawIsoFloorLamp(col,row){
   r(p.x,p.y-50,1,52,`rgb(${poleLight+20},${poleLight+10},${poleLight})`);
 
   if(isOn&&intensity>0){
-    // ── Halo vertical (crece con intensidad) ──
+    // ── Halo vertical (crece con intensidad, color real Hue) ──
     cx.globalAlpha=(0.04+0.12*intensity)+0.02*Math.sin(tt*0.05);
     cx.beginPath();cx.ellipse(p.x,p.y-25,10+8*intensity,20+20*intensity,0,0,Math.PI*2);
-    cx.fillStyle='#ffee44';cx.fill();
+    cx.fillStyle=haloCol;cx.fill();
     cx.globalAlpha=1;
-    // Pantalla (más brillante con intensidad)
-    const shadeR=Math.floor(200+55*intensity),shadeG=Math.floor(190+50*intensity),shadeB=Math.floor(140+60*intensity);
+    // Pantalla (teñida con color real)
+    const shadeR=Math.floor(Math.min(255,lc.r*0.7+55*intensity));
+    const shadeG=Math.floor(Math.min(255,lc.g*0.7+50*intensity));
+    const shadeB=Math.floor(Math.min(255,lc.b*0.5+60*intensity));
     cx.beginPath();
     cx.moveTo(p.x-10,p.y-48);cx.lineTo(p.x+10,p.y-48);
     cx.lineTo(p.x+6,p.y-60);cx.lineTo(p.x-6,p.y-60);
     cx.closePath();
     cx.fillStyle=`rgb(${shadeR},${shadeG},${shadeB})`;cx.fill();
-    cx.strokeStyle=`rgba(238,221,136,${0.3+intensity*0.7})`;cx.lineWidth=1;cx.stroke();
-    // Bombilla (tamaño proporcional)
+    cx.strokeStyle=haloColA(0.3+intensity*0.7);cx.lineWidth=1;cx.stroke();
+    // Bombilla (tamaño proporcional, color real)
     const bulbR=2+2*intensity;
     cx.beginPath();cx.arc(p.x,p.y-52,bulbR,0,Math.PI*2);
-    cx.fillStyle=`rgba(255,255,136,${0.4+intensity*0.6})`;cx.fill();
+    cx.fillStyle=haloColA(0.4+intensity*0.6);cx.fill();
     // Resplandor
     cx.globalAlpha=0.15+0.3*intensity;
     cx.beginPath();cx.arc(p.x,p.y-52,bulbR+3+2*intensity,0,Math.PI*2);
-    cx.fillStyle='#ffee66';cx.fill();
+    cx.fillStyle=haloCol;cx.fill();
     cx.globalAlpha=1;
     // Borde superior
-    r(p.x-6,p.y-61,12,2,`rgba(238,221,136,${0.3+intensity*0.7})`);
+    r(p.x-6,p.y-61,12,2,haloColA(0.3+intensity*0.7));
   } else {
     // ── APAGADA ──
     cx.beginPath();
