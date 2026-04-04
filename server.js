@@ -28,6 +28,33 @@ const YARIG_EMAIL = process.env.YARIG_EMAIL || '';
 const YARIG_PASSWORD = process.env.YARIG_PASSWORD || '';
 const YARIG_HOST = 'yarig.ai';
 
+// ── Philips Hue ────────────────────────────────────────────
+const HUE_BRIDGE_IP = process.env.HUE_BRIDGE_IP || '';
+const HUE_API_KEY = process.env.HUE_API_KEY || '';
+
+function hueRequest(method, endpoint, body) {
+  return new Promise((resolve, reject) => {
+    const opts = {
+      hostname: HUE_BRIDGE_IP,
+      port: 443,
+      path: `/api/${HUE_API_KEY}${endpoint}`,
+      method,
+      rejectAuthorized: false,
+      headers: { 'Content-Type': 'application/json' },
+    };
+    const req = https.request(opts, res => {
+      let data = '';
+      res.on('data', chunk => data += chunk);
+      res.on('end', () => {
+        try { resolve(JSON.parse(data)); } catch { resolve(data); }
+      });
+    });
+    req.on('error', reject);
+    if (body) req.write(JSON.stringify(body));
+    req.end();
+  });
+}
+
 // ── Session management ─────────────────────────────────────
 
 let yarigCookies = {};
@@ -151,7 +178,7 @@ async function yarigAPI(urlPath, postData) {
 const MIME = {
   '.html': 'text/html', '.js': 'application/javascript', '.css': 'text/css',
   '.json': 'application/json', '.png': 'image/png', '.jpg': 'image/jpeg',
-  '.mp3': 'audio/mpeg', '.wav': 'audio/wav', '.ico': 'image/x-icon',
+  '.mp3': 'audio/mpeg', '.wav': 'audio/wav', '.mp4': 'video/mp4', '.ico': 'image/x-icon',
 };
 
 function serveStatic(req, res) {
@@ -185,7 +212,7 @@ const server = http.createServer(async (req, res) => {
   if (req.method === 'OPTIONS') {
     res.writeHead(204, {
       'Access-Control-Allow-Origin': '*',
-      'Access-Control-Allow-Methods': 'GET, POST, OPTIONS',
+      'Access-Control-Allow-Methods': 'GET, POST, PUT, OPTIONS',
       'Access-Control-Allow-Headers': 'Content-Type',
     });
     res.end();
@@ -260,6 +287,58 @@ const server = http.createServer(async (req, res) => {
 
   if (url === '/yarig/status') {
     jsonResponse(res, { connected: loggedIn, email: YARIG_EMAIL });
+    return;
+  }
+
+  // ── Hue API routes ──
+
+  if (url === '/hue/lights') {
+    if (!HUE_BRIDGE_IP) { jsonResponse(res, { error: 'Hue not configured' }); return; }
+    try {
+      const data = await hueRequest('GET', '/lights');
+      jsonResponse(res, data);
+    } catch (e) { jsonResponse(res, { error: e.message }); }
+    return;
+  }
+
+  if (url === '/hue/groups') {
+    if (!HUE_BRIDGE_IP) { jsonResponse(res, { error: 'Hue not configured' }); return; }
+    try {
+      const data = await hueRequest('GET', '/groups');
+      jsonResponse(res, data);
+    } catch (e) { jsonResponse(res, { error: e.message }); }
+    return;
+  }
+
+  // PUT /hue/lights/:id/state — set light state
+  if (url.match(/^\/hue\/lights\/\d+\/state$/) && req.method === 'PUT') {
+    if (!HUE_BRIDGE_IP) { jsonResponse(res, { error: 'Hue not configured' }); return; }
+    const lightId = url.split('/')[3];
+    const body = await readBody(req);
+    try {
+      const data = await hueRequest('PUT', `/lights/${lightId}/state`, body);
+      jsonResponse(res, data);
+    } catch (e) { jsonResponse(res, { error: e.message }); }
+    return;
+  }
+
+  // PUT /hue/groups/:id/action — set group action
+  if (url.match(/^\/hue\/groups\/\d+\/action$/) && req.method === 'PUT') {
+    if (!HUE_BRIDGE_IP) { jsonResponse(res, { error: 'Hue not configured' }); return; }
+    const groupId = url.split('/')[3];
+    const body = await readBody(req);
+    try {
+      const data = await hueRequest('PUT', `/groups/${groupId}/action`, body);
+      jsonResponse(res, data);
+    } catch (e) { jsonResponse(res, { error: e.message }); }
+    return;
+  }
+
+  if (url === '/hue/status') {
+    jsonResponse(res, {
+      configured: !!HUE_BRIDGE_IP,
+      bridge: HUE_BRIDGE_IP || null,
+    });
     return;
   }
 

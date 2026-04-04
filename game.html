@@ -656,6 +656,31 @@ function yarigSyncStaff(){
   YARIG.missionsDone=YARIG.tasks.filter(t=>t.finished==='1').length;
   YARIG.missionsActive=YARIG.tasks.filter(t=>t.start_time&&!t.end_time&&t.finished==='0').length;
 
+  // ── Hue ↔ Yarig task state sync ──
+  if(HUE.enabled&&!hueManualOverride){
+    const allDone=YARIG.missionsTotal>0&&YARIG.missionsDone===YARIG.missionsTotal;
+    const hasActive=YARIG.missionsActive>0;
+    // Celebration flash when task just finished
+    const justFinished=G.staff.some((s,i)=>s.hired&&prevStates[i]!=='finished'&&s.yarigState==='finished');
+    if(justFinished){
+      HUE.lastSent=0;
+      hueAll({on:true,bri:254,xy:[0.21,0.71],alert:'lselect',transitiontime:2}); // green flash
+      setTimeout(()=>{HUE.lastSent=0;hueAll({on:true,bri:254,ct:300,alert:'none'});},3000);
+    }
+    // All tasks done: celebration color loop
+    else if(allDone){
+      if(tt%300===0){HUE.lastSent=0;hueAll({on:true,bri:254,effect:'colorloop'});}
+    }
+    // Active task: focused blue-white
+    else if(hasActive){
+      if(tt%300===0){HUE.lastSent=0;hueAll({on:true,bri:254,ct:250,effect:'none'});}
+    }
+    // No active tasks: warm idle
+    else {
+      if(tt%300===0){HUE.lastSent=0;hueAll({on:true,bri:180,ct:400,effect:'none'});}
+    }
+  }
+
   // Update LED banner with Yarig status
   if(YARIG.connected&&G.staff[0]&&G.staff[0].yarigState==='active'){
     YARIG.ledMsg='★ '+G.staff[0].name+' TRABAJA EN: '+(G.staff[0].yarigTaskDesc||'').toUpperCase().slice(0,30)+' ★  '+YARIG.missionsDone+'/'+YARIG.missionsTotal+' TAREAS COMPLETADAS  ★';
@@ -776,9 +801,9 @@ async function toggleStudioLight(){
 
 // ── PHILIPS HUE INTEGRATION ─────────────────────────────────
 const HUE_DEFAULTS={
-  bridgeIP:'192.168.1.37',
-  apiKey:'fsj2dkVBF0wOtDUvdMnisfdyBZHSqPHULmQ3ehQ0',
-  lights:{despacho:9,comedor:8},
+  bridgeIP:'192.168.1.72',
+  apiKey:'fC9BXrEB9FM1RCJf3ZBW6hrWo9bbmqgwDQy7rYhU',
+  lights:{mesita:1,exterior:2},
   enabled:true,
 };
 const HUE={
@@ -7603,6 +7628,49 @@ window.xtAPI = (function(){
       return {ok:true,message:'Finalizando: '+(t.description||'').trim()};
     },
 
+    // ── HUE ──────────────────────────────────────────────────
+    hueStatus: function(){
+      return {ok:true,data:{enabled:HUE.enabled,on:HUE.on,bridge:HUE.bridgeIP,lights:HUE.lights,error:HUE.error}};
+    },
+    hueToggle: function(){
+      hueToggle();
+      return {ok:true,message:'Hue '+(HUE.on?'encendido':'apagado')};
+    },
+    hueColor: function(r,g,b){
+      // Convert RGB (0-255) to CIE xy for Hue
+      const R=r/255,G_=g/255,B=b/255;
+      const rr=R>0.04045?Math.pow((R+0.055)/1.055,2.4):R/12.92;
+      const gg=G_>0.04045?Math.pow((G_+0.055)/1.055,2.4):G_/12.92;
+      const bb=B>0.04045?Math.pow((B+0.055)/1.055,2.4):B/12.92;
+      const X=rr*0.4124+gg*0.3576+bb*0.1805;
+      const Y=rr*0.2126+gg*0.7152+bb*0.0722;
+      const Z=rr*0.0193+gg*0.1192+bb*0.9505;
+      const sum=X+Y+Z;
+      const x=sum>0?X/sum:0.3127;const y=sum>0?Y/sum:0.3290;
+      HUE.lastSent=0;
+      hueAll({on:true,bri:254,xy:[x,y]});
+      return {ok:true,message:`Color RGB(${r},${g},${b}) → xy(${x.toFixed(3)},${y.toFixed(3)})`};
+    },
+    hueScene: function(scene){
+      const scenes={
+        focus:{on:true,bri:254,ct:250,effect:'none'},
+        relax:{on:true,bri:180,ct:400,effect:'none'},
+        party:{on:true,bri:254,effect:'colorloop'},
+        alert:{on:true,bri:254,xy:[0.67,0.32],alert:'lselect'},
+        celebrate:{on:true,bri:254,xy:[0.21,0.71],alert:'lselect'},
+        off:{on:false},
+      };
+      const s=scenes[scene];
+      if(!s) return {ok:false,message:'Escenas: '+Object.keys(scenes).join(', ')};
+      HUE.lastSent=0;hueAll(s);
+      return {ok:true,message:'Escena Hue: '+scene};
+    },
+    hueBrightness: function(bri){
+      if(bri<1||bri>254) return {ok:false,message:'Brillo: 1-254'};
+      HUE.lastSent=0;hueAll({on:true,bri:bri});
+      return {ok:true,message:'Brillo: '+bri};
+    },
+
     // ── AYUDA ─────────────────────────────────────────────────
     help: function(){
       return {ok:true,message:'xtAPI — Comandos disponibles',data:{
@@ -7610,6 +7678,7 @@ window.xtAPI = (function(){
         acciones: ['hire(slot)','train(slot)','fire(slot)','restock(slot)','advertise(0|1|2)','upgrade()','visit(Com|Tec|Del|GC)','save()'],
         musica: ['toggleMusic()','nextTrack()','prevTrack()','toggleLamp()'],
         yarig: ['yarigStatus()','yarigTasks()','yarigTeam()','yarigSync()','yarigStart(idx)','yarigPause(idx)','yarigFinish(idx)'],
+        hue: ['hueStatus()','hueToggle()','hueColor(r,g,b)','hueScene(name)','hueBrightness(1-254)'],
         helpers: ['hireByRole(rol)','hireByName(nombre)','restockByName(nombre)','restockAll()','hireAll()','trainAll()'],
         atajos: ['hireDJ()','hireCashier()','hireHostess()','hireManager()','hireStorcker()'],
       }};
