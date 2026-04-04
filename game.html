@@ -6,7 +6,7 @@
   <meta http-equiv="Cache-Control" content="no-cache, no-store, must-revalidate"/>
   <meta http-equiv="Pragma" content="no-cache"/>
   <meta http-equiv="Expires" content="0"/>
-  <title>Yarig.ai The Game — v5.2</title>
+  <title>Yarig.ai The Game — v5.3</title>
   <style>
     *{margin:0;padding:0;box-sizing:border-box}
     html,body{width:100%;height:100%;overflow:hidden;background:#000;font-family:monospace}
@@ -70,7 +70,7 @@
 </div>
 <script>
 // ═══════════════════════════════════════════════════════════════
-//  YARIG.AI THE GAME — v5.2 — 2026-04-04
+//  YARIG.AI THE GAME — v5.3 — 2026-04-04
 // ═══════════════════════════════════════════════════════════════
 const cv=document.getElementById('c'), cx=cv.getContext('2d');
 cx.imageSmoothingEnabled=false;
@@ -937,9 +937,9 @@ const P={
   counter:'#8b6e4e',counterT:'#a0845c',shelf:'#7a5c3a',shelfT:'#9a7a52',
   desk:'#6b8a5a',deskT:'#7ca06a',lott:'#8a7a40',lottT:'#b8a550',
   door:'#5a4832',neon1:'#2a8a5a',neon2:'#c05a6a',neon3:'#d4a030',neonB:'#4a7ab0',
-  ui:'#f0e8d4',uiB:'#e0d8c0',uiH:'#d8d0b8',gray:'#8a8070',
-  uiT:'#2a6a4a',uiT2:'#3a5a4a',uiT3:'#7a7060',
-  btn:'#d8d0b8',btnA:'#c8c0a8',
+  ui:'#1e1e2e',uiB:'#2a2a3e',uiH:'#3a3a5e',gray:'#8a8a9a',
+  uiT:'#e0e0ff',uiT2:'#aab0cc',uiT3:'#6a6a8a',
+  btn:'#3a3a5e',btnA:'#4a4a6e',
   skin:'#ffcc99',hair:['#2a1500','#cc4422','#1a3399','#111111','#884400','#cc8800'],
   shirts:['#4466cc','#cc4444','#44aa55','#9944cc','#dd7722','#2288aa'],
   pants:'#3a4455',shoes:'#2a1a0a',
@@ -1051,7 +1051,7 @@ let activeModel=0;
 // ── I18N ──────────────────────────────────────────────────────
 const LANGS={
   es:{
-    menuTitle:'XTANCO',menuSub:'SIMULADOR DE PRODUCTIVIDAD — v5.2',
+    menuTitle:'XTANCO',menuSub:'SIMULADOR DE PRODUCTIVIDAD — v5.3',
     langPick:'SELECCIONA IDIOMA',startBtn:'PULSA ENTER PARA EMPEZAR',
     langEs:'🇪🇸  CASTELLANO',langEn:'🇬🇧  ENGLISH',
     tut:[
@@ -1114,7 +1114,7 @@ const LANGS={
     modelStart:['€3.500','€2.800','€4.500','€6.000'],
   },
   en:{
-    menuTitle:'XTANCO',menuSub:'PRODUCTIVITY SIMULATOR — v5.2',
+    menuTitle:'XTANCO',menuSub:'PRODUCTIVITY SIMULATOR — v5.3',
     langPick:'SELECT LANGUAGE',startBtn:'PRESS ENTER TO START',
     langEs:'🇪🇸  CASTELLANO',langEn:'🇬🇧  ENGLISH',
     tut:[
@@ -3219,7 +3219,7 @@ function drawMenu(){
     }
   }
   // Version tag
-  cx.globalAlpha=0.3;tx('v5.2 · 2026-04-04',W-80,H-8,P.gray,7,'center');cx.globalAlpha=1;
+  cx.globalAlpha=0.3;tx('v5.3 · 2026-04-04',W-80,H-8,P.gray,7,'center');cx.globalAlpha=1;
 }
 
 // ── INTRO / HOW TO PLAY ───────────────────────────────────────
@@ -6225,9 +6225,10 @@ function drawFloats(){
 function drawHUD(){
   // Compact top bar (GDS style: "Y1 M8 W4 · $226.0K")
   const hh=28;
-  r(0,0,W,hh,'#2a1e10');
-  cx.strokeStyle='#4a3820';cx.lineWidth=1;
-  cx.beginPath();cx.moveTo(0,hh-0.5);cx.lineTo(W,hh-0.5);cx.stroke();
+  const hgrd=cx.createLinearGradient(0,0,0,hh);
+  hgrd.addColorStop(0,'#1a1a2e');hgrd.addColorStop(1,'#16213e');
+  cx.fillStyle=hgrd;cx.fillRect(0,0,W,hh);
+  r(0,hh-1,W,1,'#3a3a5a44');
   // Week progress dot (time/date now in HTML bar)
   const dotX=8;
   r(dotX,10,50,6,'#1a1208');
@@ -6387,14 +6388,15 @@ function drawElgatoNotify(){
 function drawBottomBar(){
   if(!G||!G.staff||!G.bars) return; // guard: game not ready yet
   const bh=34, by=H-bh;
-  // Solid dark background — high contrast against game area
-  r(0,by,W,bh,'#282030');
-  // Bright top border
-  r(0,by,W,2,'#ffaa44');
+  // Solid dark background — matching top bar
+  const bgrd=cx.createLinearGradient(0,by,0,by+bh);
+  bgrd.addColorStop(0,'#16213e');bgrd.addColorStop(1,'#1a1a2e');
+  cx.fillStyle=bgrd;cx.fillRect(0,by,W,bh);
+  r(0,by,W,1,'#3a3a5a44');
 
-  // Save button (left) — bright green
-  r(4,by+5,50,24,'#226622');rx(4,by+5,50,24,'#44ff44',2);
-  tx('SAVE',29,by+21,'#ffffff',10,'center');
+  // Save button (left) — sleek
+  r(4,by+5,50,24,'#2a4a3a');rx(4,by+5,50,24,'#44aa66',1);
+  tx('SAVE',29,by+21,'#66ddaa',10,'center');
   BTNS['save']={x:4,y:by+5,w:50,h:24};
 
   // Yr Sales
@@ -6444,14 +6446,14 @@ function drawBottomBar(){
 
   // Editor button — bright purple
   const edX=W-120;
-  r(edX,by+5,54,24,'#442266');rx(edX,by+5,54,24,'#aa66ff',2);
-  tx('EDIT',edX+27,by+21,'#ffffff',10,'center');
+  r(edX,by+5,54,24,'#2a2a4e');rx(edX,by+5,54,24,'#7a6aff',1);
+  tx('EDIT',edX+27,by+21,'#aa99ff',10,'center');
   BTNS['editor']={x:edX,y:by+5,w:54,h:24};
 
   // Menu button (right) — bright orange
   const menX=W-58;
-  r(menX,by+5,52,24,'#664411');rx(menX,by+5,52,24,'#ffaa44',2);
-  tx('MENU',menX+26,by+21,'#ffffff',10,'center');
+  r(menX,by+5,52,24,'#3a3020');rx(menX,by+5,52,24,'#cc9944',1);
+  tx('MENU',menX+26,by+21,'#ffcc88',10,'center');
   BTNS['menu']={x:menX,y:by+5,w:52,h:24};
 }
 
@@ -6459,15 +6461,19 @@ function drawBottomBar(){
 function drawUI(){
   if(!uiOpen) return; // panel hidden unless Menu clicked
   // Semi-transparent overlay behind panel
-  cx.globalAlpha=0.3;r(0,0,W,H,'#000');cx.globalAlpha=1;
-  // Panel background
-  r(UI.x,0,UI.w,H,P.ui);
-  rx(UI.x,0,UI.w,H,'#a09878',1.5);
+  cx.globalAlpha=0.5;r(0,0,W,H,'#000');cx.globalAlpha=1;
+  // Panel background — dark glassmorphism
+  const grd=cx.createLinearGradient(UI.x,0,UI.x+UI.w,H);
+  grd.addColorStop(0,'#1a1a2eee');grd.addColorStop(1,'#16213eee');
+  cx.fillStyle=grd;cx.fillRect(UI.x,0,UI.w,H);
+  rx(UI.x,0,UI.w,H,'#3a3a5a',1);
+  // Subtle left accent line
+  r(UI.x,0,2,H,'#4a6aff44');
   // Close X button
-  r(UI.x+UI.w-22,4,18,18,'#c8c0a8');rx(UI.x+UI.w-22,4,18,18,'#8a7a5a',1);
-  tx('✕',UI.x+UI.w-13,17,'#5a4020',10,'center');
+  r(UI.x+UI.w-22,4,18,18,'#3a3a5e');rx(UI.x+UI.w-22,4,18,18,'#6a6a8a',1);
+  tx('✕',UI.x+UI.w-13,17,'#aaaacc',10,'center');
   BTNS['closeUI']={x:UI.x+UI.w-22,y:4,w:18,h:18};
-  // Tabs (warm style)
+  // Tabs — modern dark with accent underline
   const tabNames=[...T().tabs];
   if(YARIG_LIVE_ENABLED) tabNames.push('Yarig');
   const numTabs=tabNames.length;
@@ -6475,16 +6481,19 @@ function drawUI(){
   const tabY=26;
   for(let i=0;i<numTabs;i++){
     const tx2=UI.x+i*tw;
-    r(tx2,tabY,tw,20,i===activeTab?P.uiH:P.uiB);
+    r(tx2,tabY,tw,20,i===activeTab?'#2a2a4e':'#1e1e2e');
     if(i===activeTab){
-      cx.strokeStyle='#8a6a30';cx.lineWidth=2;
-      cx.beginPath();cx.moveTo(tx2,tabY+19.5);cx.lineTo(tx2+tw,tabY+19.5);cx.stroke();
+      // Active tab accent underline (blue glow)
+      r(tx2+4,tabY+18,tw-8,2,'#4a8aff');
+      cx.shadowColor='#4a8aff';cx.shadowBlur=6;
+      r(tx2+4,tabY+18,tw-8,2,'#4a8aff');
+      cx.shadowBlur=0;
     }
-    tx(tabNames[i].slice(0,3),tx2+tw/2,tabY+15,i===activeTab?'#5a4020':P.uiT3,7,'center');
+    tx(tabNames[i].slice(0,3),tx2+tw/2,tabY+15,i===activeTab?'#e0e0ff':'#6a6a8a',7,'center');
     BTNS['tab'+i]={x:tx2,y:tabY,w:tw,h:20};
   }
-  cx.strokeStyle='#c0b898';cx.lineWidth=1;
-  cx.beginPath();cx.moveTo(UI.x,tabY+20.5);cx.lineTo(UI.x+UI.w,tabY+20.5);cx.stroke();
+  // Tab bottom separator
+  r(UI.x,tabY+20,UI.w,1,'#3a3a5a');
   const py=50;
   if(activeTab===0) tabSales(py);
   if(activeTab===1) tabStaff(py);
@@ -6495,20 +6504,31 @@ function drawUI(){
 
 function tabYarig(py){
   const x=UI.x+8,w=UI.w-16;
-  // Header
-  const connCol=YARIG.connected?'#44aa44':'#aa4444';
-  const connTxt=YARIG.connected?'Conectado':'Desconectado';
-  tx('🎯 Yarig.ai',x+w/2,py+10,'#5a4020',9,'center');
-  tx(connTxt,x+w/2,py+22,connCol,7,'center');
+  // Header with accent
+  const connCol=YARIG.connected?'#44dd88':'#dd4444';
+  const connDot=YARIG.connected?'●':'○';
+  tx('🎯 Yarig.ai',x+w/2,py+10,'#e0e0ff',9,'center');
+  tx(connDot,x+8,py+22,connCol,8);
+  tx(YARIG.connected?'Live':'Offline',x+18,py+22,connCol,7);
 
-  // Score
-  tx('Puntuación: '+YARIG.score,x+w-5,py+10,'#8a7a5a',7,'right');
+  // Score badge
+  const scoreBg=YARIG.score>=0?'#2a4a3a':'#4a2a2a';
+  r(x+w-50,py+2,48,16,scoreBg);rx(x+w-50,py+2,48,16,YARIG.score>=0?'#44aa66':'#aa4444',0.5);
+  tx(YARIG.score+' pts',x+w-26,py+13,YARIG.score>=0?'#66ddaa':'#dd6666',7,'center');
 
-  let y=py+32;
+  // Mission progress bar
+  const done=YARIG.missionsDone||0,total=YARIG.missionsTotal||0;
+  const prog=total>0?done/total:0;
+  r(x,py+28,w,10,'#2a2a3e');
+  r(x,py+28,(w*prog)|0,10,prog>=1?'#44dd66':'#4a8aff');
+  rx(x,py+28,w,10,'#3a3a5a',0.5);
+  tx(done+'/'+total+' tareas',x+w/2,py+36,'#ccccee',6,'center');
+
+  let y=py+44;
 
   // Tasks
   if(YARIG.tasks.length===0){
-    tx('Sin tareas para hoy',x+w/2,y+10,'#a09888',8,'center');
+    tx('Sin tareas para hoy',x+w/2,y+10,'#6a6a8a',8,'center');
   }
   for(let i=0;i<YARIG.tasks.length&&i<6;i++){
     const t=YARIG.tasks[i];
@@ -6519,34 +6539,35 @@ function tabYarig(py){
     const isDone=t.finished==='1';
     const isPending=!t.start_time&&t.finished==='0';
 
-    // Task row background
-    const rowH=38;
-    const rowCol=isActive?'#e8f4fd':isPaused?'#fff3cd':isDone?'#d4edda':'#f8f8f0';
-    r(x,y,w,rowH,rowCol);rx(x,y,w,rowH,'#c0b898',0.5);
+    // Task card — dark with colored left accent
+    const rowH=36;
+    const accentCol=isDone?'#44dd66':isActive?'#4a8aff':isPaused?'#ffaa44':'#6a6a8a';
+    r(x,y,w,rowH,'#2a2a3e');rx(x,y,w,rowH,'#3a3a5a',0.5);
+    r(x,y,3,rowH,accentCol); // left accent bar
 
     // Status icon + description
     const icon=isDone?'✅':isActive?'▶️':isPaused?'⏸':'⏳';
-    tx(icon,x+10,y+14,'#333',9);
-    tx(desc.slice(0,20)+(desc.length>20?'…':''),x+24,y+14,'#4a3a20',7);
-    tx(proj,x+24,y+26,'#8a7a5a',6);
+    tx(icon,x+10,y+14,'#fff',8);
+    tx(desc.slice(0,18)+(desc.length>18?'…':''),x+24,y+14,'#d0d0ee',7);
+    tx(proj,x+24,y+25,'#6a6a8a',6);
 
     // Action buttons
     if(isPending||isPaused){
-      mkBtn('yarigStart_'+i,x+w-65,y+4,28,14,'▶️','#28a745');
+      mkBtn('yarigStart_'+i,x+w-65,y+6,28,12,'▶️','#2a5a3a');
     }
     if(isActive){
-      mkBtn('yarigPause_'+i,x+w-65,y+4,28,14,'⏸','#f39c12');
+      mkBtn('yarigPause_'+i,x+w-65,y+6,28,12,'⏸','#5a4a2a');
     }
     if(!isDone){
-      mkBtn('yarigFinish_'+i,x+w-32,y+4,28,14,'✅','#28a745');
+      mkBtn('yarigFinish_'+i,x+w-32,y+6,28,12,'✅','#2a5a3a');
     }
 
-    y+=rowH+2;
+    y+=rowH+3;
   }
 
   // Refresh button
-  y+=8;
-  mkBtn('yarigRefresh',x+w/2-30,y,60,18,'🔄 Sync','#3498db');
+  y+=6;
+  mkBtn('yarigRefresh',x+w/2-30,y,60,16,'🔄 Sync','#2a3a5e');
 
   // Clocking info
   if(YARIG.clocking.length>0){
@@ -6557,9 +6578,10 @@ function tabYarig(py){
 }
 
 function mkBtn(id,x,y,w,h,lbl,col,ok=true){
-  const bg=ok?'#e8e0c8':'#d8d0b8',tc=ok?'#4a3a20':'#a09888';
-  r(x,y,w,h,bg);rx(x,y,w,h,ok?'#a09060':'#c0b8a0',1);
-  if(ok){r(x,y,w,2,'#f0e8d0');} // highlight top
+  const bg=ok?(col||'#3a4a6e'):'#2a2a3e';
+  const tc=ok?'#e0e0ff':'#5a5a7a';
+  r(x,y,w,h,bg);rx(x,y,w,h,ok?'#5a6a8e':'#3a3a4e',1);
+  if(ok){r(x,y,w,1,'#5a7aaa44');} // subtle highlight
   tx(lbl,x+w/2,y+h/2+4,tc,7,'center');
   if(ok) BTNS[id]={x,y,w,h};
 }
