@@ -780,21 +780,24 @@ async function toggleStudioLight(){
   }catch(e){
     console.log('[Elgato] Real light unavailable (game lamp still works)');
   }
+  // Set lamp intensity immediately so visual updates this frame
+  if(G) G.lampIntensity=newOn?100:0;
   // Also toggle Hue lights (bypass throttle for manual action)
   if(HUE.enabled){
     HUE.on=newOn;
     HUE.notify=120;
-    HUE.lastSent=0; // force bypass throttle
     hueManualOverride=true;
     hueManualTimer=3600; // skip auto-sync for 60 seconds after manual toggle
+    // Send directly to each light, bypassing hueAll throttle
+    const hueState=newOn?{on:true,bri:254,ct:300}:{on:false};
     try{
-      if(newOn) await hueAll({on:true,bri:254,ct:300});
-      else await hueAll({on:false});
+      await Promise.allSettled(Object.values(HUE.lights).map(id=>hueSend(id,hueState)));
       console.log(`[Hue] Lights: ${newOn?'ON':'OFF'}`);
     }catch(e){
       HUE.error=true;
       console.log('[Hue] Lights unavailable');
     }
+    setTimeout(huePollState,1500);
   }
   elgatoState.busy=false;
 }
