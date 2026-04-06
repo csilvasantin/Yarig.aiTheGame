@@ -1,4 +1,4 @@
-# CODEX — Yarig.aiTheGame
+# Proyecto 10 — Yarig.aiTheGame
 
 ## Estado actual (2026-04-04) — v5.5
 **Todas las fases completadas + Philips Hue pulido.** Juego funcional con integración Yarig.ai bidireccional, control de luces Hue con sync bidireccional preciso, y modo DJ con strobe real.
