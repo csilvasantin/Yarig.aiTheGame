@@ -6,7 +6,7 @@
   <meta http-equiv="Cache-Control" content="no-cache, no-store, must-revalidate"/>
   <meta http-equiv="Pragma" content="no-cache"/>
   <meta http-equiv="Expires" content="0"/>
-  <title>Yarig.ai The Game — v5.3</title>
+  <title>Yarig.ai The Game — v5.6</title>
   <style>
     *{margin:0;padding:0;box-sizing:border-box}
     html,body{width:100%;height:100%;overflow:hidden;background:#000;font-family:monospace}
@@ -25,6 +25,7 @@
     .comp-pct{font-size:10px;font-weight:bold;color:#eee}
     .btn-save{background:#225522;color:#66ff66;border:1px solid #44cc44 !important}
     .btn-edit{background:#332255;color:#bb88ff;border:1px solid #8866cc !important}
+    .btn-grok{background:#14384a;color:#88ddff;border:1px solid #44aadd !important}
     .btn-menu{background:#553311;color:#ffcc66;border:1px solid #cc9933 !important}
   </style>
 </head>
@@ -52,6 +53,7 @@
   <div class="comp-box" style="border-color:#2266aa"><span class="comp-name">PM</span><span class="comp-pct" id="compPM">0%</span></div>
   <div class="comp-box" style="border-color:#333399"><span class="comp-name">BAT</span><span class="comp-pct" id="compBAT">0%</span></div>
   <div class="spacer"></div>
+  <button class="btn-grok" id="btnGrok">Grok</button>
   <button class="btn-edit" id="btnEdit">✏ Edit</button>
   <button class="btn-menu" id="btnMenu">☰ Menu</button>
 </div>
@@ -70,7 +72,7 @@
 </div>
 <script>
 // ═══════════════════════════════════════════════════════════════
-//  YARIG.AI THE GAME — v5.3 — 2026-04-04
+//  YARIG.AI THE GAME — v5.6 — 2026-04-12
 // ═══════════════════════════════════════════════════════════════
 const cv=document.getElementById('c'), cx=cv.getContext('2d');
 cx.imageSmoothingEnabled=false;
@@ -384,6 +386,7 @@ function toggleVideoPause(){
 const bbEl=document.getElementById('topBar');
 document.getElementById('btnSave').onclick=()=>{if(G)doAction('save');};
 document.getElementById('btnEdit').onclick=()=>{if(G)doAction('editor');};
+document.getElementById('btnGrok').onclick=()=>{if(G)doAction('grokAdvice');};
 document.getElementById('btnMenu').onclick=()=>{if(G)doAction('menu');};
 document.getElementById('btnQuit').onclick=()=>{if(G)doAction('quit');};
 
@@ -718,6 +721,99 @@ function saveShopSettings(){
   try{localStorage.setItem('xtanco_settings',JSON.stringify(shopTimeSettings));}catch(e){}
 }
 loadShopSettings();
+
+// ── GROK COACH ───────────────────────────────────────────────
+const grokCoach={
+  visible:false,busy:false,source:'local',model:'',fingerprint:'',
+  advice:[],error:'',updatedAt:0,
+};
+
+function grokLines(){
+  const isEs=lang==='es';
+  if(!G||!G.prods||!G.staff){
+    return [isEs?'Arranca una partida y te doy una lectura táctica.':'Start a game and I will read the board.'];
+  }
+  const avgStk=G.prods.reduce((a,p)=>a+(p.stock/p.max),0)/G.prods.length;
+  const low=G.prods.map((p,i)=>({p,i,pct:p.stock/p.max})).sort((a,b)=>a.pct-b.pct)[0];
+  const hired=G.staff.filter(s=>s.hired);
+  const weakStaff=hired.slice().sort((a,b)=>(a.energy+a.morale)-(b.energy+b.morale))[0];
+  const target=CFG.YEAR_TARGETS[G.year-1]||1;
+  const progress=G.yearRevenue/target;
+  const out=[];
+  if(YARIG.connected&&YARIG.missionsActive>0){
+    out.push(isEs?'Protege la tarea activa: mantén luces estables y evita abrir más frentes.':'Protect the active task: keep lights stable and avoid new fronts.');
+  }
+  if(YARIG.connected&&YARIG.missionsTotal>0&&YARIG.missionsDone<YARIG.missionsTotal){
+    out.push(isEs?'Cierra una tarea Yarig corta para subir moral y activar celebración Hue.':'Close a short Yarig task to lift morale and trigger Hue celebration.');
+  }
+  if(avgStk<0.35&&low) out.push(isEs?'Repón '+(T().prodLabel[low.i]||('producto '+low.i))+' antes de que te reviente el rating.':'Restock '+(T().prodLabel[low.i]||('product '+low.i))+' before rating drops.');
+  if(progress<0.55&&G.week>CFG.WEEKS_PER_YEAR/2) out.push(isEs?'Lanza publicidad media o premium: vas corto contra el objetivo anual.':'Run medium or premium ads: annual target is drifting away.');
+  if(hired.length<3&&G.money>700) out.push(isEs?'Contrata repositor o azafata: más manos rescatan ventas sin stock.':'Hire a stocker or hostess: extra hands save out-of-stock sales.');
+  if(weakStaff&&weakStaff.energy<35) out.push(isEs?'Forma o rota a '+weakStaff.name+': baja energía está frenando ventas.':'Train or rotate '+weakStaff.name+': low energy is slowing sales.');
+  if(G.comp&&G.comp.promoTimer>0) out.push(isEs?'Hay promo rival: una campaña premium la cancela al instante.':'Rival promo active: premium campaign cancels it instantly.');
+  if(out.length===0) out.push(isEs?'Mantén stock por encima del 40% y empuja fama: la tienda está respirando bien.':'Keep stock above 40% and push fame: the shop is breathing well.');
+  if(out.length<2) out.push(isEs?'Pulsa 3 stock, 2 personal, 4 campañas, 5 Yarig.':'Press 3 stock, 2 staff, 4 campaigns, 5 Yarig.');
+  return out.slice(0,3);
+}
+
+function grokSnapshot(){
+  const rating=G&&G.reviews?reviewRating():0;
+  const reviewLabel=rating?T().reviewBadge[rating]:'sin reseñas';
+  return {
+    year:G.year,week:G.week,money:G.money,yearRevenue:G.yearRevenue,
+    yearTarget:CFG.YEAR_TARGETS[G.year-1],satisfaction:G.satisfaction,fame:G.fame,
+    customersToday:G.customersToday,rating:reviewLabel,
+    products:G.prods.map((p,i)=>({name:T().prodLabel[i]||('Producto '+i),stock:p.stock,max:p.max,pct:Math.round(p.stock/p.max*100),price:p.price})),
+    staff:G.staff.map(s=>({
+      name:s.name,role:T().staffLabel[s.role]||s.role,hired:s.hired,level:s.level,
+      energy:s.energy,morale:s.morale,yarigState:s.yarigState||'idle',
+      yarigTask:(s.yarigTaskDesc||'').slice(0,90),
+    })),
+    yarig:{
+      connected:YARIG.connected,score:YARIG.score||0,total:YARIG.missionsTotal||0,
+      done:YARIG.missionsDone||0,active:YARIG.missionsActive||0,
+    },
+    events:[
+      G.rush&&G.rush.active?'hora punta':null,
+      G.inspect&&G.inspect.active?'inspección':null,
+      G.weather&&G.weather.type?G.weather.type:null,
+      G.holiday&&G.holiday.active?G.holiday.name:null,
+      G.comp&&G.comp.promoTimer>0?'promo rival':null,
+    ].filter(Boolean).join(', '),
+  };
+}
+
+async function askGrokCoach(){
+  if(!G||grokCoach.busy) return;
+  grokCoach.visible=true;
+  grokCoach.busy=true;
+  grokCoach.error='';
+  grokCoach.advice=[lang==='es'?'Grok está leyendo tienda, tareas y luces...':'Grok is reading shop, tasks and lights...'];
+  try{
+    const res=await fetch('/grok/advice',{
+      method:'POST',
+      headers:{'Content-Type':'application/json'},
+      body:JSON.stringify({snapshot:grokSnapshot()}),
+      signal:AbortSignal.timeout(9000),
+    });
+    const json=await res.json().catch(()=>null);
+    if(!res.ok||!json||!json.ok) throw new Error((json&&json.error)||('HTTP '+res.status));
+    grokCoach.source='grok';
+    grokCoach.model=json.model||'Grok';
+    grokCoach.fingerprint=json.fingerprint||'';
+    grokCoach.advice=(json.advice&&json.advice.length?json.advice:grokLines()).slice(0,3);
+    showEv('🧠 Grok coach online','#44aadd');
+  }catch(e){
+    grokCoach.source='local';
+    grokCoach.model='local';
+    grokCoach.error=e&&e.message?e.message:'offline';
+    grokCoach.advice=grokLines();
+    showEv('🧠 Coach local: '+(lang==='es'?'Grok no disponible':'Grok unavailable'),'#668899');
+  }finally{
+    grokCoach.busy=false;
+    grokCoach.updatedAt=tt;
+  }
+}
 
 // Get sky colors based on game hour (returns [top, mid, bottom])
 function getSkyColors(hour){
@@ -1905,6 +2001,7 @@ document.addEventListener('keydown',e=>{
     if(e.code==='Digit3'){activeTab=2;uiOpen=true;}
     if(e.code==='Digit4'){activeTab=3;uiOpen=true;}
     if(e.code==='Digit5'&&YARIG_LIVE_ENABLED){activeTab=4;uiOpen=true;}
+    if(e.code==='KeyG'){askGrokCoach();}
     // L = toggle Elgato studio light
     if(e.code==='KeyL'){toggleStudioLight();}
     // C = toggle air conditioning
@@ -2157,6 +2254,8 @@ function doAction(id){
     uiOpen=false;return;
   }
   if(id==='lampToggle'){toggleStudioLight();return;}
+  if(id==='grokAdvice'){askGrokCoach();return;}
+  if(id==='grokClose'){grokCoach.visible=false;return;}
   if(id==='acToggle'){acOn=!acOn;return;}
   if(id==='aromaToggle'){aromaOn=!aromaOn;return;}
   if(id.startsWith('staffClick')){
@@ -6638,6 +6737,36 @@ function drawEvent(){
   if(G.eventTimer>0) G.eventTimer--;
 }
 
+function drawGrokCoach(){
+  if(!grokCoach.visible) return;
+  const bx=12,by=42,bw=310;
+  const lines=grokCoach.advice&&grokCoach.advice.length?grokCoach.advice:grokLines();
+  const lineH=15;
+  const bh=48+lines.length*lineH+(grokCoach.error?12:0);
+  const edge=grokCoach.source==='grok'?'#44aadd':'#778899';
+  const title=grokCoach.source==='grok'?'GROK COACH':'COACH LOCAL';
+  cx.globalAlpha=0.94;
+  r(bx,by,bw,bh,'#071019');
+  rx(bx,by,bw,bh,edge,1.5);
+  r(bx,by,bw,4,edge);
+  cx.globalAlpha=1;
+  tx('🧠 '+title,bx+10,by+20,edge,10);
+  tx(grokCoach.busy?'pensando...':(grokCoach.model||'offline'),bx+bw-28,by+20,'#b8ddeb',6,'right');
+  r(bx+bw-22,by+8,14,14,'#14232a');rx(bx+bw-22,by+8,14,14,'#446677',1);
+  tx('×',bx+bw-15,by+19,'#d8eef8',9,'center');
+  BTNS['grokClose']={x:bx+bw-22,y:by+8,w:14,h:14};
+  let y=by+37;
+  lines.forEach(line=>{
+    const text=('· '+line).slice(0,76);
+    tx(text,bx+10,y,'#e6f6ff',7);
+    y+=lineH;
+  });
+  if(grokCoach.error){
+    tx('proxy: '+grokCoach.error.slice(0,46),bx+10,y,'#88a0aa',6);
+  }
+  mkBtn('grokAdvice',bx+10,by+bh-22,bw-20,16,grokCoach.busy?'LEYENDO...':'NUEVO CONSEJO (G)',edge,!grokCoach.busy);
+}
+
 // ── LIGHT NOTIFICATIONS (Elgato + Hue) ────────────────────────
 function drawElgatoNotify(){
   const showElgato=elgatoState.notify>0;
@@ -7688,6 +7817,7 @@ function loop(){
   cx.save();try{drawFloats();}catch(e){}cx.restore();
   cx.save();try{drawEvent();}catch(e){}cx.restore();
   cx.save();try{drawHUD();}catch(e){}cx.restore();
+  cx.save();try{drawGrokCoach();}catch(e){}cx.restore();
   cx.save();try{drawElgatoNotify();}catch(e){}cx.restore();
   cx.save();try{drawDemoBadge();}catch(e){}cx.restore();
   cx.save();try{drawUI();}catch(e){}cx.restore();
@@ -7842,6 +7972,7 @@ window.xtAPI = (function(){
     nextTrack: function(){ doAction('musicNext'); return {ok:true,message:'Siguiente canción: '+(G?G.nowPlaying:'')}; },
     prevTrack: function(){ doAction('musicPrev'); return {ok:true,message:'Canción anterior: '+(G?G.nowPlaying:'')}; },
     toggleLamp: function(){ doAction('lampToggle'); return {ok:true,message:'Lámpara toggled'}; },
+    grokAdvice: function(){ doAction('grokAdvice'); return {ok:true,message:'Coach Grok solicitado'}; },
 
     // ── HELPERS POR NOMBRE ────────────────────────────────────
     hireByRole: function(roleName){

@@ -1,7 +1,7 @@
 # Proyecto 10 — Yarig.aiTheGame
 
-## Estado actual (2026-04-04) — v5.5
-**Todas las fases completadas + Philips Hue pulido.** Juego funcional con integración Yarig.ai bidireccional, control de luces Hue con sync bidireccional preciso, y modo DJ con strobe real.
+## Estado actual (2026-04-12) — v5.6
+**Todas las fases completadas + Philips Hue pulido + Grok Coach.** Juego funcional con integración Yarig.ai bidireccional, control de luces Hue con sync bidireccional preciso, modo DJ con strobe real y copiloto táctico Grok con fallback local.
 
 ## Qué es
 Digital Twin de productividad: juego isométrico (fork de Xtanco v4.9) donde los personajes representan al equipo real de Yarig.ai. Las tareas del día controlan el comportamiento de los personajes y viceversa.
@@ -12,11 +12,13 @@ Digital Twin de productividad: juego isométrico (fork de Xtanco v4.9) donde los
 - v5.1 = xtAPI, score→morale, celebraciones, polish
 - v5.3 = dark UI redesign (glassmorphism, tabs, modern)
 - v5.4 = Philips Hue integration (proxy, sync, tab lock)
-- v5.5 = Hue polish: toggle preciso, DJ strobe real, sync bidireccional robusto (ACTUAL)
+- v5.5 = Hue polish: toggle preciso, DJ strobe real, sync bidireccional robusto
+- v5.6 = Grok Coach: consejos tácticos desde xAI con snapshot de tienda, Yarig, stock y eventos (ACTUAL)
 
 ## Arquitectura
 ```
 Browser (game.html) → Node.js proxy (server.js:9124) → Yarig.ai API
+Browser (game.html) → Node.js proxy (server.js:9124) → xAI Grok API
 ```
 
 ## Flag: YARIG_LIVE_ENABLED
@@ -32,10 +34,19 @@ Browser (game.html) → Node.js proxy (server.js:9124) → Yarig.ai API
 - Endpoints Hue:
   - GET /hue/lights, /hue/groups, /hue/status
   - PUT /hue/lights/:id/state, /hue/groups/:id/action
+- Endpoints Grok:
+  - POST /grok/advice
 
 ## Juego (game.html) — v5.1
 Fork de xtanco-game v4.9 (7272+ líneas). Motor isométrico Canvas 2D, vanilla JS.
 Incluye: clima, signage videos, EQ visualizer, mood icons, día/noche, LED banner.
+
+### Grok Coach
+- Botón `Grok` en la barra superior y tecla `G` durante partida.
+- Envía snapshot táctico: caja, objetivo anual, stock, personal, reseñas, eventos y tareas Yarig.
+- Respuesta de máximo 3 consejos accionables.
+- Si falta `XAI_API_KEY` o falla la API, usa coach local sin romper la partida.
+- `xtAPI.grokAdvice()` disponible para dispararlo desde consola/CLI.
 
 ### Integración Yarig implementada
 - **yarigPoll()** cada 30s sincroniza tareas de Yarig.ai
@@ -98,6 +109,8 @@ YARIG_PASSWORD=<password de yarig.ai>
 PORT=9124
 HUE_BRIDGE_IP=<IP del Hue Bridge>
 HUE_API_KEY=<API key del Hue Bridge>
+XAI_API_KEY=<API key de xAI>
+XAI_MODEL=grok-4.20-beta-latest-non-reasoning
 ```
 
 ## Philips Hue — Setup
@@ -129,6 +142,13 @@ HUE_API_KEY=<API key del Hue Bridge>
 - API Yarig: docs completos en Yarig.Telegram/docs/yarig_api_map.md
 
 ## Diario de cambios
+
+### 2026-04-12 — v5.6: Grok Coach
+- **Proxy Grok**: `/grok/advice` llama a `https://api.x.ai/v1/chat/completions` con `XAI_API_KEY`.
+- **Snapshot táctico**: Grok recibe tienda, staff, stock, reseñas, eventos y estado Yarig.
+- **UI in-game**: botón `Grok`, tecla `G`, panel de consejos y cierre rápido.
+- **Fallback local**: consejos básicos si la clave no está configurada o la API falla.
+- **xtAPI**: `xtAPI.grokAdvice()` para activar el coach desde automatización.
 
 ### 2026-04-04 — v5.5: Hue polish + DJ strobe
 - **Toggle instantáneo**: visual se actualiza en el mismo frame, sin bloqueo

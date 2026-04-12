@@ -27,6 +27,8 @@ const PORT = parseInt(process.env.PORT || '9124');
 const YARIG_EMAIL = process.env.YARIG_EMAIL || '';
 const YARIG_PASSWORD = process.env.YARIG_PASSWORD || '';
 const YARIG_HOST = 'yarig.ai';
+const XAI_API_KEY = process.env.XAI_API_KEY || process.env.GROK_API_KEY || '';
+const XAI_MODEL = process.env.XAI_MODEL || 'grok-4.20-beta-latest-non-reasoning';
 
 // ── Philips Hue ────────────────────────────────────────────
 const HUE_BRIDGE_IP = process.env.HUE_BRIDGE_IP || '';
@@ -189,7 +191,8 @@ const MIME = {
 };
 
 function serveStatic(req, res) {
-  let filePath = path.join(__dirname, req.url === '/' ? 'index.html' : req.url.split('?')[0]);
+  const urlPath = req.url.split('?')[0];
+  let filePath = path.join(__dirname, urlPath === '/' ? 'index.html' : urlPath);
   if (!fs.existsSync(filePath)) { res.writeHead(404); res.end('Not found'); return; }
   const ext = path.extname(filePath);
   res.writeHead(200, { 'Content-Type': MIME[ext] || 'application/octet-stream' });
@@ -214,6 +217,95 @@ function jsonResponse(res, data) {
   res.end(JSON.stringify(data));
 }
 
+function buildGrokPrompt(snapshot) {
+  const stock = (snapshot.products || [])
+    .map(p => `${p.name || 'Producto'} ${p.stock}/${p.max} (${p.pct}%)`)
+    .join(', ');
+  const staff = (snapshot.staff || [])
+    .filter(s => s.hired)
+    .map(s => {
+      const task = s.yarigTask ? ` tarea="${s.yarigTask}" estado=${s.yarigState || 'idle'}` : '';
+      return `${s.name} ${s.role} L${s.level} ENE${Math.round(s.energy)} MOR${Math.round(s.morale)}${task}`;
+    })
+    .join(', ');
+  const yarig = snapshot.yarig
+    ? `Yarig: conectado=${snapshot.yarig.connected}, score=${snapshot.yarig.score}, tareas ${snapshot.yarig.done}/${snapshot.yarig.total}, activas=${snapshot.yarig.active}.`
+    : 'Yarig: sin datos.';
+
+  return [
+    'Eres Grok dentro de Yarig.ai The Game, un simulador retro de productividad y estanco digital.',
+    'Da consejo táctico en castellano para los próximos 60 segundos de partida.',
+    'Formato estricto: máximo 3 líneas, cada línea empieza por "· ".',
+    'Sé concreto: menciona stock, personal, campañas, tareas Yarig o luces solo si ayudan.',
+    '',
+    `Estado: año ${snapshot.year}, semana ${snapshot.week}, caja ${Math.round(snapshot.money)} EUR, ingresos anuales ${Math.round(snapshot.yearRevenue)}/${Math.round(snapshot.yearTarget)} EUR.`,
+    `Satisfacción ${Math.round(snapshot.satisfaction)}%, fama ${Math.round(snapshot.fame)}%, clientes hoy ${snapshot.customersToday}, rating ${snapshot.rating || 'sin rating'}.`,
+    `Stock: ${stock || 'n/a'}.`,
+    `Personal: ${staff || 'solo manager'}.`,
+    yarig,
+    `Eventos: ${snapshot.events || 'ninguno'}.`,
+  ].join('\n');
+}
+
+function requestGrokAdvice(snapshot) {
+  return new Promise((resolve, reject) => {
+    const payload = JSON.stringify({
+      model: XAI_MODEL,
+      stream: false,
+      temperature: 0.4,
+      max_tokens: 180,
+      messages: [
+        { role: 'system', content: 'Eres un copiloto táctico de videojuegos de gestión. Responde solo con acciones útiles.' },
+        { role: 'user', content: buildGrokPrompt(snapshot) },
+      ],
+    });
+
+    const opts = {
+      hostname: 'api.x.ai',
+      port: 443,
+      path: '/v1/chat/completions',
+      method: 'POST',
+      timeout: 12000,
+      headers: {
+        'Content-Type': 'application/json',
+        'Authorization': `Bearer ${XAI_API_KEY}`,
+        'Content-Length': Buffer.byteLength(payload),
+      },
+    };
+
+    const req = https.request(opts, apiRes => {
+      let data = '';
+      apiRes.on('data', chunk => data += chunk);
+      apiRes.on('end', () => {
+        let json = null;
+        try { json = JSON.parse(data); } catch {}
+        if (apiRes.statusCode < 200 || apiRes.statusCode >= 300) {
+          reject(new Error((json && json.error && json.error.message) || `xAI HTTP ${apiRes.statusCode}`));
+          return;
+        }
+        const text = json && json.choices && json.choices[0] && json.choices[0].message && json.choices[0].message.content;
+        if (!text) {
+          reject(new Error('xAI returned no advice'));
+          return;
+        }
+        resolve({
+          advice: text.split('\n').map(s => s.replace(/^[-·*\s]+/, '').trim()).filter(Boolean).slice(0, 3),
+          model: json.model || XAI_MODEL,
+          fingerprint: json.system_fingerprint || null,
+        });
+      });
+    });
+
+    req.on('error', reject);
+    req.on('timeout', () => {
+      req.destroy();
+      reject(new Error('xAI timeout'));
+    });
+    req.write(payload);
+    req.end();
+  });
+}
+
 const server = http.createServer(async (req, res) => {
   // CORS preflight
   if (req.method === 'OPTIONS') {
@@ -227,6 +319,25 @@ const server = http.createServer(async (req, res) => {
   }
 
   const url = req.url.split('?')[0];
+
+  // ── Grok coach route ──
+
+  if (url === '/grok/advice' && req.method === 'POST') {
+    if (!XAI_API_KEY) {
+      jsonResponse(res, { ok: false, error: 'Missing XAI_API_KEY or GROK_API_KEY in .env' });
+      return;
+    }
+    try {
+      const body = await readBody(req);
+      const result = await requestGrokAdvice(body.snapshot || {});
+      console.log(`[Grok] ${result.model} → ${result.advice.join(' | ')}`);
+      jsonResponse(res, { ok: true, ...result });
+    } catch (e) {
+      console.error('[Grok] error:', e.message);
+      jsonResponse(res, { ok: false, error: e.message });
+    }
+    return;
+  }
 
   // ── Yarig API routes ──
 
@@ -371,6 +482,7 @@ const server = http.createServer(async (req, res) => {
 
 server.listen(PORT, () => {
   console.log(`\n  🎮 Yarig.aiTheGame running at http://localhost:${PORT}\n`);
+  console.log(`  🧠 Grok coach: ${XAI_API_KEY ? 'enabled' : 'set XAI_API_KEY in .env to enable'}\n`);
   // Pre-login to Yarig
   yarigLogin().then(ok => {
     if (ok) console.log('  ✅ Connected to Yarig.ai');
