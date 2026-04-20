@@ -253,7 +253,8 @@ async function pushDiaryEntry(taskList, userEmail, score) {
   const pts = typeof score === 'string' ? parseInt(score, 10)
             : typeof score === 'number' ? score
             : (score && (score.score ?? score.points)) ?? null;
-  const completedHeading = `Tareas completadas (${completed.length})` +
+  const total = completed.length + pending.length;
+  const completedHeading = `Tareas completadas (${completed.length}/${total})` +
     (Number.isFinite(pts) ? ` · ${pts} puntos` : '');
   const sections  = [];
   if (completed.length) sections.push({ heading: completedHeading, items: completed.map(taskText) });
