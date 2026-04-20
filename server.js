@@ -271,7 +271,17 @@ async function pushDiaryEntry(taskList, userEmail, score) {
 
   const isDone = t => {
     const v = t.finished ?? t.completed ?? t.done;
-    return v === true || v === 1 || v === '1';
+    const finishedFlag = v === true || v === 1 || v === '1';
+    if (!finishedFlag) return false;
+    // Yarig keeps finished='1' even after a task is re-opened (play pressed
+    // again). When that happens start_time is bumped past end_time → treat
+    // the task as active/pending until it's closed again.
+    if (t.start_time && t.end_time) {
+      const s = new Date(String(t.start_time).replace(' ', 'T'));
+      const e = new Date(String(t.end_time).replace(' ', 'T'));
+      if (!isNaN(s) && !isNaN(e) && s > e) return false;
+    }
+    return true;
   };
   const completed = taskList.filter(isDone);
   const pending   = taskList.filter(t => !isDone(t));
