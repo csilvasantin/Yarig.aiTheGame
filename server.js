@@ -283,9 +283,12 @@ async function pushDiaryEntry(taskList, userEmail, score) {
   const total = completed.length + pending.length;
   const completedHeading = `Tareas completadas (${completed.length}/${total})` +
     (Number.isFinite(pts) ? ` · ${pts} puntos` : '');
+  // Emit items as {id, text} objects so the Diario can render bidirectional
+  // controls (Completar) on pending Yarig tasks.
+  const toItem = t => ({ id: String(t.id), text: taskText(t) });
   const sections  = [];
-  if (completed.length) sections.push({ heading: completedHeading, items: completed.map(taskText) });
-  if (pending.length)   sections.push({ heading: 'Tareas pendientes',  items: pending.map(taskText) });
+  if (completed.length) sections.push({ heading: completedHeading, items: completed.map(toItem) });
+  if (pending.length)   sections.push({ heading: 'Tareas pendientes',  items: pending.map(toItem) });
   if (!sections.length) sections.push({ heading: 'Actividad', items: [`Sin tareas registradas por ${userEmail}`] });
 
   const sectionsJs = sections.map(s =>
