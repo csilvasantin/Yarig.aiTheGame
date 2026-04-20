@@ -215,7 +215,8 @@ function scheduleDiaryPush() {
     if (!todayData) return;
     const tasks = Array.isArray(todayData.tasks) ? todayData.tasks
       : Array.isArray(todayData) ? todayData : [];
-    await pushDiaryEntry(tasks, YARIG_EMAIL);
+    const score = await yarigAPI('/score/json_user_score');
+    await pushDiaryEntry(tasks, YARIG_EMAIL, score);
   }, 5 * 60 * 1000);
   console.log('[diario] Diary push scheduled in 5 min');
 }
@@ -234,7 +235,7 @@ function taskText(t) {
   return t.description || t.name || t.text || t.title || JSON.stringify(t);
 }
 
-async function pushDiaryEntry(taskList, userEmail) {
+async function pushDiaryEntry(taskList, userEmail, score) {
   const date = todayMadrid();
   const year = date.split('-')[0];
   const titleDate = `${monthNameES(date)} de ${year}`;
@@ -247,8 +248,15 @@ async function pushDiaryEntry(taskList, userEmail) {
 
   const completed = taskList.filter(t => t.finished || t.completed || t.done);
   const pending   = taskList.filter(t => !t.finished && !t.completed && !t.done);
+  // score comes from /score/json_user_score — either a bare string like "10"
+  // or an object; normalize to a number when possible.
+  const pts = typeof score === 'string' ? parseInt(score, 10)
+            : typeof score === 'number' ? score
+            : (score && (score.score ?? score.points)) ?? null;
+  const completedHeading = `Tareas completadas (${completed.length})` +
+    (Number.isFinite(pts) ? ` · ${pts} puntos` : '');
   const sections  = [];
-  if (completed.length) sections.push({ heading: 'Tareas completadas', items: completed.map(taskText) });
+  if (completed.length) sections.push({ heading: completedHeading, items: completed.map(taskText) });
   if (pending.length)   sections.push({ heading: 'Tareas pendientes',  items: pending.map(taskText) });
   if (!sections.length) sections.push({ heading: 'Actividad', items: [`Sin tareas registradas por ${userEmail}`] });
 
@@ -543,7 +551,8 @@ const server = http.createServer(async (req, res) => {
     if (!todayData) { jsonResponse(res, { ok: false, error: 'Could not fetch Yarig tasks' }); return; }
     const tasks = Array.isArray(todayData.tasks) ? todayData.tasks
       : Array.isArray(todayData) ? todayData : [];
-    const ok = await pushDiaryEntry(tasks, YARIG_EMAIL);
+    const score = await yarigAPI('/score/json_user_score');
+    const ok = await pushDiaryEntry(tasks, YARIG_EMAIL, score);
     jsonResponse(res, { ok });
     return;
   }
