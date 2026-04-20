@@ -435,7 +435,15 @@ const server = http.createServer(async (req, res) => {
     return;
   }
 
-  const url = req.url.split('?')[0];
+  let url = req.url.split('?')[0];
+  // Tailscale Funnel serves us at /yarig and strips that prefix before
+  // forwarding. Re-add it so the same routes work via Funnel and localhost.
+  if (url === '/today' || url === '/team' || url === '/score' ||
+      url === '/notifications' || url === '/status' ||
+      url.startsWith('/task/') || url === '/clocking' ||
+      url === '/diary/push') {
+    url = '/yarig' + url;
+  }
 
   // ── Grok coach route ──
 
