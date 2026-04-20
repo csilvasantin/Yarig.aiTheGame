@@ -269,8 +269,12 @@ async function pushDiaryEntry(taskList, userEmail, score) {
   const indexSha = indexRes.sha;
   let indexContent = Buffer.from(indexRes.content, 'base64').toString('utf8');
 
-  const completed = taskList.filter(t => t.finished || t.completed || t.done);
-  const pending   = taskList.filter(t => !t.finished && !t.completed && !t.done);
+  const isDone = t => {
+    const v = t.finished ?? t.completed ?? t.done;
+    return v === true || v === 1 || v === '1';
+  };
+  const completed = taskList.filter(isDone);
+  const pending   = taskList.filter(t => !isDone(t));
   // score comes from /score/json_user_score — either a bare string like "10"
   // or an object; normalize to a number when possible.
   const pts = typeof score === 'string' ? parseInt(score, 10)
