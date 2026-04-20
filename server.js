@@ -365,7 +365,7 @@ async function pushDiaryEntry(taskList, userEmail, score, clocking) {
     `# Diario - ${titleDate} [Yarig.ai]`, '',
     ...sections.flatMap((s, si) => [
       `${si + 1}. ${s.heading}`,
-      ...s.items.map((item, ii) => `   ${String.fromCharCode(97 + ii)}. ${item}`),
+      ...s.items.map((item, ii) => `   ${String.fromCharCode(97 + ii)}. ${typeof item === 'string' ? item : (item.text || '')}`),
     ]),
   ];
   const mdBody = {
