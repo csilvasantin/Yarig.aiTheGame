@@ -265,8 +265,12 @@ function computeJourney(clocking) {
   const last = list[list.length - 1];
   const open = last ? String(last.type) === '0' : false;
   const hhmm = dt => {
-    const m = String(dt || '').match(/(\d{2}):(\d{2})/);
-    return m ? `${m[1]}:${m[2]}` : null;
+    if (!dt) return null;
+    // Yarig returns "YYYY-MM-DD HH:MM:SS" in UTC (without TZ suffix);
+    // format as Europe/Madrid wall-clock time.
+    const d = new Date(String(dt).replace(' ', 'T') + 'Z');
+    if (isNaN(d)) return null;
+    return d.toLocaleTimeString('es-ES', { hour: '2-digit', minute: '2-digit', timeZone: 'Europe/Madrid', hour12: false });
   };
   const firstIn = list.find(c => String(c.type) === '0');
   const lastOut = [...list].reverse().find(c => String(c.type) === '1');
