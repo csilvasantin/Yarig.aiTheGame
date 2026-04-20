@@ -231,8 +231,31 @@ function monthNameES(isoDate) {
   return `${parseInt(d)} de ${months[parseInt(m) - 1]}`;
 }
 
+function taskDuration(t) {
+  if (!t.start_time || !t.end_time) return null;
+  const s = new Date(t.start_time.replace(' ', 'T'));
+  const e = new Date(t.end_time.replace(' ', 'T'));
+  if (isNaN(s) || isNaN(e)) return null;
+  let sec = Math.max(0, Math.round((e - s) / 1000));
+  if (Array.isArray(t.interruptions)) {
+    for (const i of t.interruptions) {
+      const d = parseInt(i.duration ?? i.seconds ?? 0, 10);
+      if (Number.isFinite(d) && d > 0) sec -= d;
+    }
+  }
+  if (sec <= 0) return null;
+  const h = Math.floor(sec / 3600);
+  const m = Math.floor((sec % 3600) / 60);
+  const s2 = sec % 60;
+  const pad = n => String(n).padStart(2, '0');
+  if (h) return `${h}h ${pad(m)}m ${pad(s2)}s`;
+  return `${pad(m)}m ${pad(s2)}s`;
+}
+
 function taskText(t) {
-  return t.description || t.name || t.text || t.title || JSON.stringify(t);
+  const base = t.description || t.name || t.text || t.title || JSON.stringify(t);
+  const dur = taskDuration(t);
+  return dur ? `${base} (${dur})` : base;
 }
 
 async function pushDiaryEntry(taskList, userEmail, score) {
