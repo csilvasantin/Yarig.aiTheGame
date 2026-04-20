@@ -215,8 +215,9 @@ function scheduleDiaryPush() {
     if (!todayData) return;
     const tasks = Array.isArray(todayData.tasks) ? todayData.tasks
       : Array.isArray(todayData) ? todayData : [];
+    const clocking = Array.isArray(todayData.clocking) ? todayData.clocking : [];
     const score = await yarigAPI('/score/json_user_score');
-    await pushDiaryEntry(tasks, YARIG_EMAIL, score);
+    await pushDiaryEntry(tasks, YARIG_EMAIL, score, clocking);
   }, 5 * 60 * 1000);
   console.log('[diario] Diary push scheduled in 5 min');
 }
@@ -258,10 +259,29 @@ function taskText(t) {
   return dur ? `${base} (${dur})` : base;
 }
 
-async function pushDiaryEntry(taskList, userEmail, score) {
+function computeJourney(clocking) {
+  const list = Array.isArray(clocking) ? clocking.slice() : [];
+  list.sort((a, b) => String(a.datetime || '').localeCompare(String(b.datetime || '')));
+  const last = list[list.length - 1];
+  const open = last ? String(last.type) === '0' : false;
+  const hhmm = dt => {
+    const m = String(dt || '').match(/(\d{2}):(\d{2})/);
+    return m ? `${m[1]}:${m[2]}` : null;
+  };
+  const firstIn = list.find(c => String(c.type) === '0');
+  const lastOut = [...list].reverse().find(c => String(c.type) === '1');
+  return {
+    open,
+    startTime: hhmm(firstIn && firstIn.datetime),
+    endTime:   open ? null : hhmm(lastOut && lastOut.datetime),
+  };
+}
+
+async function pushDiaryEntry(taskList, userEmail, score, clocking) {
   const date = todayMadrid();
   const year = date.split('-')[0];
   const titleDate = `${monthNameES(date)} de ${year}`;
+  const journey = computeJourney(clocking);
 
   let indexRes;
   try { indexRes = await ghGet(`/repos/${DIARIO_REPO}/contents/index.html`); }
@@ -304,7 +324,10 @@ async function pushDiaryEntry(taskList, userEmail, score) {
   const sectionsJs = sections.map(s =>
     `      {\n        heading: ${JSON.stringify(s.heading)},\n        items: [\n${s.items.map(i => `          ${JSON.stringify(i)}`).join(',\n')}\n        ]\n      }`
   ).join(',\n');
-  const newEntry = `  {\n    date: "${date}",\n    title: "${titleDate}",\n    author: "Yarig.ai",\n    sections: [\n${sectionsJs}\n    ]\n  },`;
+  const timeFields =
+    (journey.startTime ? `\n    startTime: ${JSON.stringify(journey.startTime)},` : '') +
+    (journey.endTime   ? `\n    updateTime: ${JSON.stringify(journey.endTime)},`   : '');
+  const newEntry = `  {\n    date: "${date}",\n    title: "${titleDate}",\n    author: "Yarig.ai",${timeFields}\n    sections: [\n${sectionsJs}\n    ]\n  },`;
 
   // Replace existing entry for today or prepend
   const marker = `date: "${date}"`;
@@ -592,8 +615,9 @@ const server = http.createServer(async (req, res) => {
     if (!todayData) { jsonResponse(res, { ok: false, error: 'Could not fetch Yarig tasks' }); return; }
     const tasks = Array.isArray(todayData.tasks) ? todayData.tasks
       : Array.isArray(todayData) ? todayData : [];
+    const clocking = Array.isArray(todayData.clocking) ? todayData.clocking : [];
     const score = await yarigAPI('/score/json_user_score');
-    const ok = await pushDiaryEntry(tasks, YARIG_EMAIL, score);
+    const ok = await pushDiaryEntry(tasks, YARIG_EMAIL, score, clocking);
     jsonResponse(res, { ok });
     return;
   }
