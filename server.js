@@ -261,9 +261,17 @@ async function pushDiaryEntry(taskList, userEmail) {
   const marker = `date: "${date}"`;
   const markerIdx = indexContent.indexOf(marker);
   if (markerIdx !== -1) {
-    const start = indexContent.lastIndexOf('  {', markerIdx);
-    const end   = indexContent.indexOf('  },', markerIdx) + 4;
-    indexContent = indexContent.substring(0, start) + newEntry + indexContent.substring(end);
+    // Find the entry's opening `  {` (2-space indent) just before the marker
+    const start = indexContent.lastIndexOf('\n  {\n', markerIdx) + 1;
+    // Find the entry's closing `\n  },\n` — must anchor on newlines to avoid
+    // matching the 6-space section closer `      },`
+    const closeIdx = indexContent.indexOf('\n  },\n', markerIdx);
+    if (start <= 0 || closeIdx === -1) {
+      console.error('[diario] Could not locate entry boundaries, aborting push');
+      return false;
+    }
+    const end = closeIdx + '\n  },'.length + 1;
+    indexContent = indexContent.substring(0, start) + newEntry + '\n' + indexContent.substring(end);
   } else {
     indexContent = indexContent.replace('const entries = [', `const entries = [\n${newEntry}`);
   }
