@@ -27,6 +27,8 @@ const PORT = parseInt(process.env.PORT || '9124');
 const YARIG_EMAIL = process.env.YARIG_EMAIL || '';
 const YARIG_PASSWORD = process.env.YARIG_PASSWORD || '';
 const YARIG_HOST = 'yarig.ai';
+const GITHUB_TOKEN = process.env.GITHUB_TOKEN || '';
+const DIARIO_REPO = 'csilvasantin/18.-diario';
 
 // ── Philips Hue ────────────────────────────────────────────
 const HUE_BRIDGE_IP = process.env.HUE_BRIDGE_IP || '';
@@ -180,6 +182,118 @@ async function yarigAPI(urlPath, postData) {
   }
 }
 
+// ── Diario (GitHub) integration ────────────────────────────
+
+function githubRequest(method, urlPath, body) {
+  return new Promise((resolve, reject) => {
+    const opts = {
+      hostname: 'api.github.com',
+      port: 443,
+      path: urlPath,
+      method,
+      headers: {
+        'Authorization': `Bearer ${GITHUB_TOKEN}`,
+        'User-Agent': 'YarigTheGame/1.0',
+        'Accept': 'application/vnd.github+json',
+        'X-GitHub-Api-Version': '2022-11-28',
+      },
+    };
+    const bodyStr = body ? JSON.stringify(body) : null;
+    if (bodyStr) {
+      opts.headers['Content-Type'] = 'application/json';
+      opts.headers['Content-Length'] = Buffer.byteLength(bodyStr);
+    }
+    const req = https.request(opts, res => {
+      let data = '';
+      res.on('data', chunk => data += chunk);
+      res.on('end', () => {
+        try { resolve({ status: res.statusCode, data: JSON.parse(data) }); }
+        catch { resolve({ status: res.statusCode, data }); }
+      });
+    });
+    req.on('error', reject);
+    if (bodyStr) req.write(bodyStr);
+    req.end();
+  });
+}
+
+function todayMadrid() {
+  return new Date().toLocaleDateString('sv-SE', { timeZone: 'Europe/Madrid' });
+}
+
+function monthNameES(isoDate) {
+  const months = ['enero','febrero','marzo','abril','mayo','junio','julio','agosto','septiembre','octubre','noviembre','diciembre'];
+  const [, m, d] = isoDate.split('-');
+  return `${parseInt(d)} de ${months[parseInt(m) - 1]}`;
+}
+
+function taskText(t) {
+  return t.description || t.name || t.text || t.title || JSON.stringify(t);
+}
+
+async function pushDiaryEntry(taskList, userEmail) {
+  if (!GITHUB_TOKEN) { console.error('[diario] No GITHUB_TOKEN configured'); return false; }
+  const date = todayMadrid();
+  const year = date.split('-')[0];
+  const titleDate = `${monthNameES(date)} de ${year}`;
+
+  const indexRes = await githubRequest('GET', `/repos/${DIARIO_REPO}/contents/index.html`);
+  if (indexRes.status !== 200) { console.error('[diario] Could not fetch index.html:', indexRes.status); return false; }
+  const indexSha = indexRes.data.sha;
+  let indexContent = Buffer.from(indexRes.data.content, 'base64').toString('utf8');
+
+  const completed = taskList.filter(t => t.finished || t.completed || t.done);
+  const pending   = taskList.filter(t => !t.finished && !t.completed && !t.done);
+  const sections  = [];
+  if (completed.length) sections.push({ heading: 'Tareas completadas', items: completed.map(taskText) });
+  if (pending.length)   sections.push({ heading: 'Tareas pendientes',  items: pending.map(taskText) });
+  if (!sections.length) sections.push({ heading: 'Actividad', items: [`Sin tareas registradas por ${userEmail}`] });
+
+  const sectionsJs = sections.map(s =>
+    `      {\n        heading: ${JSON.stringify(s.heading)},\n        items: [\n${s.items.map(i => `          ${JSON.stringify(i)}`).join(',\n')}\n        ]\n      }`
+  ).join(',\n');
+  const newEntry = `  {\n    date: "${date}",\n    title: "${titleDate}",\n    author: "Yarig.ai",\n    sections: [\n${sectionsJs}\n    ]\n  },`;
+
+  // Replace existing entry for today or prepend
+  const marker = `date: "${date}"`;
+  const markerIdx = indexContent.indexOf(marker);
+  if (markerIdx !== -1) {
+    const start = indexContent.lastIndexOf('  {', markerIdx);
+    const end   = indexContent.indexOf('  },', markerIdx) + 4;
+    indexContent = indexContent.substring(0, start) + newEntry + indexContent.substring(end);
+  } else {
+    indexContent = indexContent.replace('const entries = [', `const entries = [\n${newEntry}`);
+  }
+
+  const pushRes = await githubRequest('PUT', `/repos/${DIARIO_REPO}/contents/index.html`, {
+    message: `Diario ${date} [Yarig.ai] — ${userEmail}`,
+    content: Buffer.from(indexContent).toString('base64'),
+    sha: indexSha,
+  });
+  if (pushRes.status !== 200 && pushRes.status !== 201) {
+    console.error('[diario] Push index.html failed:', pushRes.status); return false;
+  }
+
+  // Build and push .md
+  const mdLines = [
+    `# Diario - ${titleDate} [Yarig.ai]`, '',
+    ...sections.flatMap((s, si) => [
+      `${si + 1}. ${s.heading}`,
+      ...s.items.map((item, ii) => `   ${String.fromCharCode(97 + ii)}. ${item}`),
+    ]),
+  ];
+  const mdRes = await githubRequest('GET', `/repos/${DIARIO_REPO}/contents/${date}.md`);
+  const mdBody = {
+    message: `Diario ${date} [Yarig.ai] — ${userEmail}`,
+    content: Buffer.from(mdLines.join('\n') + '\n').toString('base64'),
+  };
+  if (mdRes.status === 200) mdBody.sha = mdRes.data.sha;
+  await githubRequest('PUT', `/repos/${DIARIO_REPO}/contents/${date}.md`, mdBody);
+
+  console.log(`[diario] Entry ${date} pushed for ${userEmail}`);
+  return true;
+}
+
 // ── HTTP Server ─────────────────────────────────────────────
 
 const MIME = {
@@ -289,6 +403,16 @@ const server = http.createServer(async (req, res) => {
       todo: body.todo || '',
     });
     jsonResponse(res, data);
+    return;
+  }
+
+  if (url === '/yarig/diary/push' && req.method === 'POST') {
+    const todayData = await yarigAPI('/tasks/json_get_current_day_tasks_and_journey_info');
+    if (!todayData) { jsonResponse(res, { ok: false, error: 'Could not fetch Yarig tasks' }); return; }
+    const tasks = Array.isArray(todayData.tasks) ? todayData.tasks
+      : Array.isArray(todayData) ? todayData : [];
+    const ok = await pushDiaryEntry(tasks, YARIG_EMAIL);
+    jsonResponse(res, { ok });
     return;
   }
 
