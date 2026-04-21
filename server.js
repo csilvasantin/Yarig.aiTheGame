@@ -330,7 +330,8 @@ async function pushDiaryEntry(taskList, userEmail, score, clocking) {
   ).join(',\n');
   const timeFields =
     (journey.startTime ? `\n    startTime: ${JSON.stringify(journey.startTime)},` : '') +
-    (journey.endTime   ? `\n    updateTime: ${JSON.stringify(journey.endTime)},`   : '');
+    (journey.endTime   ? `\n    updateTime: ${JSON.stringify(journey.endTime)},`   : '') +
+    (Number.isFinite(pts) ? `\n    points: ${pts},` : '');
   const newEntry = `  {\n    date: "${date}",\n    title: "${titleDate}",\n    author: "Yarig.ai",${timeFields}\n    sections: [\n${sectionsJs}\n    ]\n  },`;
 
   // Replace existing entry for today or prepend
